@@ -26,12 +26,14 @@ async def async_setup_entry(
             async_add_entities([VevorResetFuelLevelButton(coordinator)])
         return
 
-    async_add_entities([
-        VevorTimeSyncButton(coordinator),
+    buttons = [
         VevorResetFuelLevelButton(coordinator),
         VevorPowerOffNowButton(coordinator),
         VevorRunBurnoffButton(coordinator),
-    ])
+    ]
+    if coordinator.protocol_mode != 6:
+        buttons.insert(0, VevorTimeSyncButton(coordinator))
+    async_add_entities(buttons)
 
 
 class VevorTimeSyncButton(CoordinatorEntity[VevorHeaterCoordinator], ButtonEntity):

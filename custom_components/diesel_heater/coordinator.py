@@ -1434,7 +1434,11 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 await asyncio.wait_for(self._ensure_connected(), timeout=20.0)
                 # Beta.34: Auto-sync time on successful connection (@Wheemer, issue #38)
                 # This was previously only done for Hcalory MVP2, now extended to all protocols
-                if not self._time_synced_this_session and not getattr(self, "_is_cronus_device", False):
+                if (
+                    not self._time_synced_this_session
+                    and not getattr(self, "_is_cronus_device", False)
+                    and self._protocol_mode != 6
+                ):
                     try:
                         self._logger.debug("Auto-syncing time after connection...")
                         await asyncio.sleep(0.5)  # Give heater time to initialize
@@ -3271,6 +3275,11 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         """
         if self.is_dz06_neo:
             self._logger.info("DZ06 Neo: skipping legacy heater time-sync command")
+            return
+        if self._protocol_mode == 6:
+            self._logger.debug(
+                "FEAA protocol: skipping unsupported generic time-sync command"
+            )
             return
         # Beta.29 fix: Use dt_util.now() for correct local timezone (issue #38)
         # datetime.now() uses UTC in Docker containers → 5hr offset for EST users

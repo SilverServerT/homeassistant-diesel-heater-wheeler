@@ -142,6 +142,23 @@ class TestAsyncSetupEntry:
         call_args = async_add_entities.call_args[0][0]
         assert len(call_args) == 4
 
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_excludes_time_sync_for_feaa(self):
+        """FEAA has no APK-verified time-sync command."""
+        coordinator = create_mock_coordinator()
+        coordinator.protocol_mode = 6
+        async_add_entities = MagicMock()
+
+        await async_setup_entry(
+            MagicMock(), MagicMock(runtime_data=coordinator), async_add_entities
+        )
+
+        assert [type(entity) for entity in async_add_entities.call_args[0][0]] == [
+            VevorResetFuelLevelButton,
+            VevorPowerOffNowButton,
+            VevorRunBurnoffButton,
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Async press tests

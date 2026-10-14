@@ -1495,6 +1495,17 @@ class TestAsyncCommands:
         assert call_args[0][0] == 10
 
     @pytest.mark.asyncio
+    async def test_async_sync_time_skips_feaa(self):
+        """FEAA has no verified generic time-sync command."""
+        coordinator = create_mock_coordinator()
+        coordinator._protocol_mode = 6
+        coordinator._send_command = AsyncMock(return_value=True)
+
+        await coordinator.async_sync_time()
+
+        coordinator._send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_async_set_heater_offset(self):
         """Test async_set_heater_offset sends correct command."""
         coordinator = create_mock_coordinator()
@@ -2586,6 +2597,36 @@ class TestAsyncUpdateData:
         assert coordinator._consecutive_failures == 0
         assert coordinator.data["connected"] is True
         assert result == coordinator.data
+
+    @pytest.mark.asyncio
+    async def test_update_data_does_not_auto_sync_feaa(self):
+        """FEAA reconnects must not send the unsupported generic clock command."""
+        import time
+
+        coordinator = create_mock_coordinator()
+        coordinator._protocol_mode = 6
+        coordinator._check_daily_reset = AsyncMock()
+        coordinator._check_daily_runtime_reset = AsyncMock()
+        coordinator._time_synced_this_session = False
+        coordinator._client = MagicMock()
+        coordinator._client.is_connected = False
+
+        async def connect() -> None:
+            coordinator._client.is_connected = True
+
+        coordinator._ensure_connected = AsyncMock(side_effect=connect)
+        coordinator.async_sync_time = AsyncMock()
+        coordinator._send_command = AsyncMock(return_value=True)
+        coordinator._last_update_time = time.time() - 60
+        coordinator._last_save_time = time.time()
+        coordinator._save_valid_data = MagicMock()
+        coordinator._update_fuel_tracking = MagicMock()
+        coordinator._update_runtime_tracking = MagicMock()
+
+        await coordinator._async_update_data()
+
+        coordinator.async_sync_time.assert_not_awaited()
+        coordinator._send_command.assert_awaited_once_with(1, 0)
 
     @pytest.mark.asyncio
     async def test_update_data_retries_on_timeout(self):
