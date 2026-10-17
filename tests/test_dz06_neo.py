@@ -10,10 +10,12 @@ from custom_components.diesel_heater.burnoff import BurnoffController
 from custom_components.diesel_heater.const import (
     CONF_BURNOFF_ENABLED,
     RUNNING_MODE_TEMPERATURE,
+    RUNNING_MODE_VENTILATION,
     RUNNING_STATE_ON,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_RUNNING,
     RUNNING_STEP_STANDBY,
+    RUNNING_STEP_VENTILATION,
 )
 from custom_components.diesel_heater.coordinator import VevorHeaterCoordinator
 
@@ -23,10 +25,13 @@ FFF1 = "0000fff1-0000-1000-8000-00805f9b34fb"
 FFF2 = "0000fff2-0000-1000-8000-00805f9b34fb"
 
 
-def neo_config_response(minimum: int = 8, maximum: int = 36) -> bytearray:
+def neo_config_response(
+    minimum: int = 8, maximum: int = 36, device_type: int = 1,
+) -> bytearray:
     """Build the full 0x5C/0x16 configuration frame parsed by the Neo app."""
     frame = bytearray(24)
     frame[:2] = bytearray((0x5C, 0x16))
+    frame[2] = device_type
     frame[4], frame[5] = minimum, maximum
     return frame
 
@@ -38,9 +43,12 @@ def neo_run_settings_response(
     return bytearray((0xA5, 0x06, 0x00, raw_state, run_type, target)) + altitude.to_bytes(2, "big")
 
 
-def coordinator_for_layout(neo: bool) -> VevorHeaterCoordinator:
+def coordinator_for_layout(
+    neo: bool, name: str = "Air Heater"
+) -> VevorHeaterCoordinator:
     coordinator = VevorHeaterCoordinator.__new__(VevorHeaterCoordinator)
     coordinator._protocol_mode = 0
+    coordinator._ble_device = SimpleNamespace(name=name)
     coordinator._heater_uses_fahrenheit = False
     coordinator._is_abba_device = True
     coordinator._characteristic = SimpleNamespace(uuid=FFF2 if neo else FFF1, properties=["notify"])
@@ -109,6 +117,134 @@ def test_5a25_only_maps_evidenced_cooldown_steps(raw_state: int, expected_step: 
     frame[:2], frame[3] = b"Z%", raw_state
     coordinator._notification_callback(FFF2, frame)
     assert coordinator.data["running_step"] == expected_step
+
+
+@pytest.mark.asyncio
+async def test_legacy_dz06_uses_configuration_before_status_polling() -> None:
+    """The generic split-FFF0 path retains the app-required 5C16 exchange."""
+    coordinator = coordinator_for_layout(True, name="Sunster Neo")
+    coordinator._write_gatt = AsyncMock(
+        side_effect=lambda packet: coordinator._notification_callback(
+            FFF2, neo_config_response()
+        )
+    )
+
+    assert await coordinator._send_dz06_neo_configuration() is True
+    assert coordinator.data["neo_min_target"] == 8
+    assert coordinator.data["neo_max_target"] == 36
+    assert "neo_controller_type" not in coordinator.data
+
+
+def test_legacy_dz06_keeps_its_own_5a25_layout() -> None:
+    """Warm Drive offsets must not be applied to another split-FFF0 controller."""
+    coordinator = coordinator_for_layout(True, name="Sunster Neo")
+    frame = bytearray(39)
+    frame[:2] = b"Z%"
+    frame[3], frame[6], frame[15], frame[35] = 160, 125, 30, 21
+    frame[32:34] = (1500).to_bytes(2, "big")
+    frame[34] = 2
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["supply_voltage"] == 12.5
+    assert coordinator.data["running_state"] == RUNNING_STATE_ON
+    assert coordinator.data["running_step"] == RUNNING_STEP_STANDBY
+    assert coordinator.data.get("motor_speed") is None
+
+
+def test_5a25_parses_warm_drive_status_layout() -> None:
+    """Use the exact field layout decoded by Warm Drive."""
+    coordinator = coordinator_for_layout(True)
+    frame = bytearray(39)
+    frame[:2] = b"Z%"
+    frame[3] = 2
+    frame[4] = 7  # Warm Drive normalizes this wire value to fault code 6.
+    frame[5:7] = (300).to_bytes(2, "big")
+    frame[7:9] = (2600).to_bytes(2, "big")
+    frame[18:20] = (100).to_bytes(2, "big", signed=True)
+    frame[20:22] = (65).to_bytes(2, "big", signed=True)
+    frame[22:24] = (-5).to_bytes(2, "big", signed=True)
+    frame[15] = 24
+    frame[16] = 4
+    frame[32:34] = (1500).to_bytes(2, "big")
+    frame[34] = 2
+    frame[35] = 21
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["supply_voltage"] == 30.0
+    assert coordinator.data["error_code"] == 6
+    assert coordinator.data["fire_temperature"] == 100
+    assert coordinator.data["motor_speed"] == 2600
+    assert coordinator.data["hot_water_temperature"] == 65
+    assert coordinator.data["water_temperature"] == -5
+    assert coordinator.data["set_level"] == 4
+    assert coordinator.data["set_temp"] == 24.0
+    assert coordinator.data["cab_temperature"] == 21.0
+    assert coordinator.data["altitude"] == 1500
+
+
+def test_5a25_uses_warm_drive_fahrenheit_display_conversion() -> None:
+    coordinator = coordinator_for_layout(True)
+    board_info = bytearray(21)
+    board_info[0], board_info[17] = 0x5D, 2
+    coordinator._notification_callback(FFF2, board_info)
+    frame = bytearray(39)
+    frame[:2] = b"Z%"
+    frame[15] = 20
+    frame[18:20] = (100).to_bytes(2, "big", signed=True)
+    frame[20:22] = (30).to_bytes(2, "big", signed=True)
+    frame[22:24] = (10).to_bytes(2, "big", signed=True)
+    frame[35] = 21
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["set_temp"] == 68
+    assert coordinator.data["fire_temperature"] == 212
+    assert coordinator.data["hot_water_temperature"] == 86
+    assert coordinator.data["water_temperature"] == 50
+    assert coordinator.data["cab_temperature"] == 69
+
+
+def test_warm_drive_telemetry_clears_after_disconnect() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "fire_temperature": 100,
+            "hot_water_temperature": 65,
+            "water_temperature": 40,
+        }
+    )
+
+    coordinator._clear_sensor_values()
+
+    assert coordinator.data["fire_temperature"] is None
+    assert coordinator.data["hot_water_temperature"] is None
+    assert coordinator.data["water_temperature"] is None
+
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected_state", "expected_step"),
+    [
+        (160, 0, RUNNING_STEP_STANDBY),
+        (170, 1, RUNNING_STEP_RUNNING),
+        (171, 1, RUNNING_STEP_VENTILATION),
+    ],
+)
+def test_5a25_maps_warm_drive_extended_states(
+    raw_state: int, expected_state: int, expected_step: int,
+) -> None:
+    coordinator = coordinator_for_layout(True)
+    frame = bytearray(39)
+    frame[:2], frame[3] = b"Z%", raw_state
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["running_state"] == expected_state
+    assert coordinator.data["running_step"] == expected_step
+    if raw_state == 171:
+        assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
 
 
 def test_5a25_unknown_state_preserves_previous_running_state() -> None:
@@ -312,6 +448,43 @@ def test_bluetooth_config_response_sets_neo_target_range() -> None:
     assert coordinator.data["neo_max_target"] == 36
 
 
+@pytest.mark.parametrize(("device_type", "expected"), [(1, "air"), (2, "water")])
+def test_bluetooth_config_response_sets_warm_drive_controller_type(
+    device_type: int, expected: str,
+) -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(device_type=device_type)
+    )
+    assert coordinator.data["neo_controller_type"] == expected
+
+
+def test_board_info_response_sets_warm_drive_temperature_unit() -> None:
+    coordinator = coordinator_for_layout(True)
+    frame = bytearray(21)
+    frame[0] = 0x5D
+    frame[17] = 2
+    coordinator._notification_callback(FFF2, frame)
+    assert coordinator._heater_uses_fahrenheit is True
+
+
+@pytest.mark.asyncio
+async def test_board_info_request_uses_warm_drive_command() -> None:
+    coordinator = coordinator_for_layout(True)
+    response = bytearray(21)
+    response[0] = 0x5D
+    response[17] = 1
+    coordinator._write_gatt = AsyncMock(
+        side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
+    )
+
+    await coordinator._send_dz06_neo_board_info()
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[:4] == bytearray((0x29, 0x0D, 0x5D, 0))
+    assert coordinator._heater_uses_fahrenheit is False
+
+
 @pytest.mark.asyncio
 async def test_max_power_control_uses_the_app_packet_and_configured_limit() -> None:
     coordinator = coordinator_for_layout(True)
@@ -408,6 +581,23 @@ async def test_neo_temperature_write_accepts_stored_none_limits() -> None:
     assert coordinator._write_gatt.await_args.args[0] == bytearray.fromhex(
         "a5090151021e05dc0165e6"
     )
+
+
+def test_neo_control_settings_converts_fahrenheit_display_target() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._heater_uses_fahrenheit = True
+    coordinator.data.update(
+        {
+            "neo_min_target": 8,
+            "neo_max_target": 36,
+            "neo_raw_state": 2,
+            "neo_run_type": 2,
+            "set_temp": 68,
+            "altitude": 1500,
+        }
+    )
+
+    assert coordinator._neo_control_settings() == (2, 20, 1500)
 
 
 @pytest.mark.asyncio
