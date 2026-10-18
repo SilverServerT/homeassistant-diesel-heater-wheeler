@@ -388,13 +388,25 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         )
         if hass is None or not address:
             return None
-        try:
-            return bluetooth.async_last_service_info(
-                hass, address, connectable=True
-            )
-        except Exception as err:  # pragma: no cover - defensive
-            self._logger.debug("async_last_service_info failed: %s", err)
-            return None
+        # ESPHome proxies often cache the scan under connectable=False, and
+        # may omit the local name unless active scanning is enabled.
+        for connectable in (True, False):
+            try:
+                info = bluetooth.async_last_service_info(
+                    hass, address, connectable=connectable
+                )
+            except TypeError:
+                try:
+                    info = bluetooth.async_last_service_info(hass, address)
+                except Exception as err:  # pragma: no cover - defensive
+                    self._logger.debug("async_last_service_info failed: %s", err)
+                    return None
+            except Exception as err:  # pragma: no cover - defensive
+                self._logger.debug("async_last_service_info failed: %s", err)
+                continue
+            if info is not None:
+                return info
+        return None
 
     def _advertised_heater_name(self) -> str:
         """Prefer the live BLEDevice name, then HA's last Air Heater advertisement."""
@@ -404,13 +416,25 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         info = self._last_heater_service_info()
         return self._clean_ble_name(getattr(info, "name", None) if info else None)
 
+    def _warm_drive_type_from_advertisement(self) -> str | None:
+        """Return air/water from Warm Drive's 16-byte manufacturer record."""
+        info = self._last_heater_service_info()
+        manufacturer_data = getattr(info, "manufacturer_data", None) or {}
+        for payload in manufacturer_data.values():
+            if len(payload) == 16:
+                return "air" if payload[4] == 1 else "water"
+        return None
+
     @property
     def is_warm_drive_controller(self) -> bool:
         """Return whether the controller identifies itself as Warm Drive."""
         stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
         if stored in ("air", "water"):
             return True
-        return self._advertised_heater_name() == "Air Heater"
+        if self._advertised_heater_name() == "Air Heater":
+            return True
+        # ESPHome often delivers the 16-byte Warm Drive scan record with name=None.
+        return self._warm_drive_type_from_advertisement() in ("air", "water")
 
     def _remember_warm_drive_identity(self) -> None:
         """Persist Warm Drive type so later HA lookups with name=None stay on this path."""
@@ -424,13 +448,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return
         controller_type = self.data.get("neo_controller_type")
         if controller_type not in ("air", "water"):
-            controller_type = "air"
-            info = self._last_heater_service_info()
-            manufacturer_data = getattr(info, "manufacturer_data", None) or {}
-            for payload in manufacturer_data.values():
-                if len(payload) == 16:
-                    controller_type = "air" if payload[4] == 1 else "water"
-                    break
+            controller_type = self._warm_drive_type_from_advertisement() or "air"
         hass.config_entries.async_update_entry(
             self.config_entry,
             data={**self.config_entry.data, CONF_NEO_CONTROLLER_TYPE: controller_type},
@@ -2019,6 +2037,13 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     self.data["neo_controller_type"] = (
                         "air" if data[2] == 1 else "water"
                     )
+                self._logger.info(
+                    "DZ06 5C16 min=%s max=%s type_byte=%s warm_drive=%s",
+                    self.data.get("neo_min_target"),
+                    self.data.get("neo_max_target"),
+                    data[2],
+                    self.is_warm_drive_controller,
+                )
                 self._neo_config_received = True
             if len(data) >= 21 and data[0] == 0x5D:
                 if data[17] in (1, 2):
@@ -2706,6 +2731,53 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return None
         return run_type, target, altitude
 
+    def _neo_status_poll_settings(self) -> tuple[int, int, int]:
+        """Return an A5/09 envelope for status polling.
+
+        Opcode 0 is a poll, not a setpoint write. The control validator rejects
+        Warm Drive standby/ventilation run types and out-of-range A5 targets,
+        which previously skipped the 5A25 request after a successful connect.
+        """
+        settings = self._neo_control_settings(use_startup_defaults=True)
+        if settings is not None:
+            return settings
+        try:
+            run_type = int(self.data.get("neo_run_type", 1) or 1)
+        except (TypeError, ValueError):
+            run_type = 1
+        if run_type not in (1, 2):
+            run_type = 1
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            minimum, maximum = 8, 36
+        if minimum > maximum:
+            minimum, maximum = 8, 36
+        try:
+            target = int(round(float(self.data.get("set_temp", minimum))))
+            if self._heater_uses_fahrenheit:
+                target = int(round((target - 32) * 5 / 9))
+        except (TypeError, ValueError):
+            target = minimum
+        if not minimum <= target <= maximum:
+            target = minimum
+        try:
+            altitude = int(self.data.get("altitude", 1) or 1)
+        except (TypeError, ValueError):
+            altitude = 1
+        if not 0 <= altitude <= 0xFFFF:
+            altitude = 1
+        self._logger.info(
+            "DZ06 status poll using fallback settings run_type=%s target=%s altitude=%s",
+            run_type,
+            target,
+            altitude,
+        )
+        return run_type, target, altitude
+
     async def _async_set_dz06_neo_control(
         self, run_type: int, target: int, altitude: int
     ) -> bool:
@@ -2897,19 +2969,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if self.is_dz06_neo:
             if command == 1:
-                settings = self._neo_control_settings(use_startup_defaults=True)
-                if settings is None:
-                    self._logger.debug(
-                        "DZ06 status poll skipped: run_type=%r set_temp=%r "
-                        "altitude=%r min=%r max=%r",
-                        self.data.get("neo_run_type"),
-                        self.data.get("set_temp"),
-                        self.data.get("altitude"),
-                        self.data.get("neo_min_target"),
-                        self.data.get("neo_max_target"),
-                    )
-                    return False
-                packet = self._neo_packet(0x00, *settings)
+                packet = self._neo_packet(0x00, *self._neo_status_poll_settings())
                 self._notification_data = None
                 try:
                     await self._write_gatt(packet)

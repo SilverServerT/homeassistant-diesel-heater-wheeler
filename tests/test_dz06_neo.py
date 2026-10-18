@@ -109,6 +109,52 @@ def test_missing_ble_name_without_advertisement_is_not_warm_drive() -> None:
         assert coordinator.is_warm_drive_controller is False
 
 
+def test_warm_drive_uses_nonconnectable_advertisement_name() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    info = SimpleNamespace(name="Air Heater", manufacturer_data={})
+
+    def last_info(_hass, _address, connectable=True):
+        return None if connectable else info
+
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        side_effect=last_info,
+    ):
+        assert coordinator.is_warm_drive_controller is True
+
+
+def test_warm_drive_uses_manufacturer_record_when_name_missing() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    info = SimpleNamespace(
+        name=None,
+        manufacturer_data={0xFFFF: b"\x00\x00\x00\x00\x01" + b"\x00" * 11},
+    )
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        return_value=info,
+    ):
+        assert coordinator.is_warm_drive_controller is True
+
+
+def test_status_poll_settings_fallback_for_warm_drive_standby() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "neo_run_type": 160,
+            "set_temp": 22,
+            "altitude": 1500,
+            "neo_min_target": 8,
+            "neo_max_target": 36,
+        }
+    )
+    assert coordinator._neo_control_settings(use_startup_defaults=True) is None
+    assert coordinator._neo_status_poll_settings() == (1, 22, 1500)
+
+
 def test_direction_associates_writes_with_fff1_and_notifications_with_fff2() -> None:
     coordinator = coordinator_for_layout(True)
     assert coordinator._abba_write_char.uuid == FFF1
