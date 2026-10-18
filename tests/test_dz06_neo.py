@@ -10,6 +10,7 @@ from custom_components.diesel_heater.burnoff import BurnoffController
 from custom_components.diesel_heater.const import (
     CONF_BURNOFF_ENABLED,
     CONF_NEO_CONTROLLER_TYPE,
+    RUNNING_MODE_LEVEL,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
     RUNNING_STATE_ON,
@@ -27,13 +28,21 @@ FFF2 = "0000fff2-0000-1000-8000-00805f9b34fb"
 
 
 def neo_config_response(
-    minimum: int = 8, maximum: int = 36, device_type: int = 1,
+    minimum: int = 8,
+    maximum: int = 36,
+    device_type: int = 1,
+    auto_start: int = 0,
+    min_fan: int = 1600,
+    max_fan: int = 4500,
 ) -> bytearray:
     """Build the full 0x5C/0x16 configuration frame parsed by the Neo app."""
     frame = bytearray(24)
     frame[:2] = bytearray((0x5C, 0x16))
     frame[2] = device_type
     frame[4], frame[5] = minimum, maximum
+    frame[8:10] = min_fan.to_bytes(2, "big")
+    frame[10:12] = max_fan.to_bytes(2, "big")
+    frame[14] = auto_start
     return frame
 
 
@@ -62,6 +71,8 @@ def coordinator_for_layout(
     coordinator._burnoff = BurnoffController(coordinator)
     coordinator._notification_data = None
     coordinator._neo_run_settings_received = False
+    coordinator._warm_drive_board_config = None
+    coordinator._client = None
     coordinator._neo_password = 100000000
     coordinator._logger = MagicMock()
     coordinator.async_request_refresh = AsyncMock()
@@ -150,17 +161,21 @@ def test_5c16_identifies_nameless_split_fff0_as_warm_drive_air() -> None:
             name="C8:17:F5:28:E7:9D", manufacturer_data={}
         ),
     ):
-        coordinator._notification_callback(FFF2, neo_config_response(device_type=1))
+        coordinator._notification_callback(
+            FFF2, neo_config_response(device_type=1, auto_start=1)
+        )
         assert coordinator.data["neo_controller_type"] == "air"
         assert coordinator.is_warm_drive_controller is True
+        assert coordinator.data["auto_start_stop"] is True
     coordinator.hass.config_entries.async_update_entry.assert_called_once()
 
 
 def test_5c16_does_not_reclassify_named_non_warm_drive_controller() -> None:
     coordinator = coordinator_for_layout(True, name="Sunster Neo")
-    coordinator._notification_callback(FFF2, neo_config_response(device_type=1))
+    coordinator._notification_callback(FFF2, neo_config_response(device_type=1, auto_start=1))
     assert "neo_controller_type" not in coordinator.data
     assert coordinator.is_warm_drive_controller is False
+    assert coordinator.data.get("auto_start_stop") is None
 
 
 def test_warm_drive_uses_manufacturer_record_when_name_missing() -> None:
@@ -791,3 +806,117 @@ def test_neo_burnoff_snapshot_captures_the_configured_upper_limit() -> None:
     )
 
     assert coordinator.burnoff_protocol_snapshot()["neo_max_target"] == 35
+
+
+def test_warm_drive_auto_start_packet_echoes_5c16_and_flips_flag() -> None:
+    coordinator = coordinator_for_layout(True)
+    frame = neo_config_response(auto_start=0, min_fan=1600, max_fan=4500)
+    coordinator._notification_callback(FFF2, frame)
+
+    packet = coordinator._warm_drive_auto_start_packet(True)
+
+    assert packet is not None
+    assert packet[:2] == bytearray((0x26, 0x12))
+    assert packet[2:14] == frame[2:14]
+    assert packet[8:12] == bytes((0x06, 0x40, 0x11, 0x94))
+    assert packet[14] == 1
+    assert packet[15:17] == frame[15:17]
+    assert packet[17] == 1
+    assert packet.hex() == "261201000824000006401194000001000001578b"
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_auto_start_stop_writes_0x26() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["running_mode"] = RUNNING_MODE_TEMPERATURE
+    coordinator._notification_callback(FFF2, neo_config_response(auto_start=0))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_auto_start_stop(True)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[14] == 1
+    assert coordinator.data["auto_start_stop"] is True
+    coordinator.async_request_refresh.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_auto_start_stop_stays_in_temperature_mode() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["running_mode"] = RUNNING_MODE_LEVEL
+    coordinator._notification_callback(FFF2, neo_config_response(auto_start=0))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_auto_start_stop(True)
+
+    coordinator._write_gatt.assert_not_awaited()
+    assert coordinator.data["auto_start_stop"] is False
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_level_mode_clears_local_auto_start() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "set_temp": 17,
+            "neo_run_type": 2,
+            "altitude": 1,
+            "neo_raw_state": 1,
+            "neo_min_target": 8,
+            "neo_max_target": 35,
+            "auto_start_stop": True,
+            "running_mode": RUNNING_MODE_TEMPERATURE,
+        }
+    )
+    coordinator._notification_callback(
+        FFF2, neo_config_response(auto_start=1, minimum=8, maximum=35)
+    )
+    response = bytearray(39)
+    response[:2], response[15], response[34] = b"Z%", 17, 1
+    coordinator._write_gatt = AsyncMock(
+        side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
+    )
+
+    assert await coordinator.async_set_mode(RUNNING_MODE_LEVEL) is True
+    assert coordinator.data["auto_start_stop"] is False
+    assert coordinator._warm_drive_board_config[14] == 1
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_auto_start_stop_can_disable() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["running_mode"] = RUNNING_MODE_TEMPERATURE
+    coordinator._notification_callback(FFF2, neo_config_response(auto_start=1))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_auto_start_stop(False)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[14] == 0
+    assert coordinator.data["auto_start_stop"] is False
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_auto_start_stop_requires_5c16() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["running_mode"] = RUNNING_MODE_TEMPERATURE
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_auto_start_stop(True)
+
+    coordinator._write_gatt.assert_not_awaited()
+    assert coordinator.data.get("auto_start_stop") is None
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_auto_start_stop_keeps_state_on_write_failure() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["running_mode"] = RUNNING_MODE_TEMPERATURE
+    coordinator._notification_callback(FFF2, neo_config_response(auto_start=0))
+    coordinator._write_gatt = AsyncMock(side_effect=OSError("gatt"))
+
+    await coordinator.async_set_auto_start_stop(True)
+
+    assert coordinator.data["auto_start_stop"] is False
