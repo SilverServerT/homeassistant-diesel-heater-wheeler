@@ -1,7 +1,7 @@
 """Focused tests for the experimentally supported Sunster Neo transport."""
 
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -84,6 +84,29 @@ def test_warm_drive_survives_missing_live_ble_name() -> None:
 def test_warm_drive_name_match_ignores_padding() -> None:
     coordinator = coordinator_for_layout(True, name="Air Heater ")
     assert coordinator.is_warm_drive_controller is True
+
+
+def test_warm_drive_uses_ha_advertisement_when_ble_name_missing() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    info = SimpleNamespace(name="Air Heater", manufacturer_data={})
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        return_value=info,
+    ):
+        assert coordinator.is_warm_drive_controller is True
+
+
+def test_missing_ble_name_without_advertisement_is_not_warm_drive() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        return_value=None,
+    ):
+        assert coordinator.is_warm_drive_controller is False
 
 
 def test_direction_associates_writes_with_fff1_and_notifications_with_fff2() -> None:

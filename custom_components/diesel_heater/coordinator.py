@@ -375,17 +375,65 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         """Return whether the advertised name matches ThermoConnect Cronus."""
         return "CRONUS" in (self._ble_device.name or "")
 
+    @staticmethod
+    def _clean_ble_name(name: str | None) -> str:
+        """Normalize a BLE local name from either Bleak or HA advertisement data."""
+        return (name or "").replace("\x00", "").strip()
+
+    def _last_heater_service_info(self):
+        """Return HA's last advertisement for this heater, if bluetooth is available."""
+        hass = getattr(self, "hass", None)
+        address = getattr(self, "address", None) or getattr(
+            self._ble_device, "address", None
+        )
+        if hass is None or not address:
+            return None
+        try:
+            return bluetooth.async_last_service_info(
+                hass, address, connectable=True
+            )
+        except Exception as err:  # pragma: no cover - defensive
+            self._logger.debug("async_last_service_info failed: %s", err)
+            return None
+
+    def _advertised_heater_name(self) -> str:
+        """Prefer the live BLEDevice name, then HA's last Air Heater advertisement."""
+        cleaned = self._clean_ble_name(getattr(self._ble_device, "name", None))
+        if cleaned:
+            return cleaned
+        info = self._last_heater_service_info()
+        return self._clean_ble_name(getattr(info, "name", None) if info else None)
+
     @property
     def is_warm_drive_controller(self) -> bool:
         """Return whether the controller identifies itself as Warm Drive."""
         stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
         if stored in ("air", "water"):
             return True
-        return (
-            (getattr(self._ble_device, "name", None) or "")
-            .replace("\x00", "")
-            .strip()
-            == "Air Heater"
+        return self._advertised_heater_name() == "Air Heater"
+
+    def _remember_warm_drive_identity(self) -> None:
+        """Persist Warm Drive type so later HA lookups with name=None stay on this path."""
+        if not self.is_warm_drive_controller:
+            return
+        stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
+        if stored in ("air", "water"):
+            return
+        hass = getattr(self, "hass", None)
+        if hass is None or not hasattr(hass, "config_entries"):
+            return
+        controller_type = self.data.get("neo_controller_type")
+        if controller_type not in ("air", "water"):
+            controller_type = "air"
+            info = self._last_heater_service_info()
+            manufacturer_data = getattr(info, "manufacturer_data", None) or {}
+            for payload in manufacturer_data.values():
+                if len(payload) == 16:
+                    controller_type = "air" if payload[4] == 1 else "water"
+                    break
+        hass.config_entries.async_update_entry(
+            self.config_entry,
+            data={**self.config_entry.data, CONF_NEO_CONTROLLER_TYPE: controller_type},
         )
 
     @property
@@ -1899,10 +1947,12 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
             if self.is_dz06_neo:
                 self._logger.info(
-                    "Split FFF0 controller name=%r warm_drive=%s",
+                    "Split FFF0 controller name=%r advertised=%r warm_drive=%s",
                     getattr(self._ble_device, "name", None),
+                    self._advertised_heater_name() or None,
                     self.is_warm_drive_controller,
                 )
+                self._remember_warm_drive_identity()
                 if not await self._send_dz06_neo_configuration():
                     self._logger.error(
                         "Split FFF0 5C16 configuration read failed. Close the phone "
@@ -2849,6 +2899,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             if command == 1:
                 settings = self._neo_control_settings(use_startup_defaults=True)
                 if settings is None:
+                    self._logger.debug(
+                        "DZ06 status poll skipped: run_type=%r set_temp=%r "
+                        "altitude=%r min=%r max=%r",
+                        self.data.get("neo_run_type"),
+                        self.data.get("set_temp"),
+                        self.data.get("altitude"),
+                        self.data.get("neo_min_target"),
+                        self.data.get("neo_max_target"),
+                    )
                     return False
                 packet = self._neo_packet(0x00, *settings)
                 self._notification_data = None
