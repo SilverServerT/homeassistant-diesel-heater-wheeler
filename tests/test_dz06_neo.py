@@ -9,6 +9,7 @@ from custom_components.diesel_heater import coordinator as coordinator_module
 from custom_components.diesel_heater.burnoff import BurnoffController
 from custom_components.diesel_heater.const import (
     CONF_BURNOFF_ENABLED,
+    CONF_NEO_CONTROLLER_TYPE,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
     RUNNING_STATE_ON,
@@ -70,6 +71,19 @@ def coordinator_for_layout(
 def test_split_fff0_layout_is_detected_narrowly() -> None:
     assert coordinator_for_layout(True).is_dz06_neo is True
     assert coordinator_for_layout(False).is_dz06_neo is False
+
+
+def test_warm_drive_survives_missing_live_ble_name() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.config_entry = SimpleNamespace(
+        data={CONF_NEO_CONTROLLER_TYPE: "air"}
+    )
+    assert coordinator.is_warm_drive_controller is True
+
+
+def test_warm_drive_name_match_ignores_padding() -> None:
+    coordinator = coordinator_for_layout(True, name="Air Heater ")
+    assert coordinator.is_warm_drive_controller is True
 
 
 def test_direction_associates_writes_with_fff1_and_notifications_with_fff2() -> None:

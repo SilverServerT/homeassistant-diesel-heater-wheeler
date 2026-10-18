@@ -256,6 +256,15 @@ class TestConfirmStep:
         assert result["data"][CONF_NEO_PASSWORD] == 100000000
         assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
 
+    async def test_warm_drive_discovery_persists_air_without_scan_record(self):
+        flow = VevorHeaterConfigFlow()
+        flow._discovery_info = _make_ble_discovery(name="Air Heater")
+
+        result = await flow.async_step_confirm(user_input={})
+
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
+
     async def test_warm_drive_discovery_records_water_controller_type(self):
         flow = VevorHeaterConfigFlow()
         flow._discovery_info = _make_ble_discovery(
@@ -516,6 +525,7 @@ class TestUserStep:
         assert result["step_id"] == "confirm"
         result = await flow.async_step_confirm(user_input={})
         assert result["data"][CONF_NEO_PASSWORD] == 100000000
+        assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
 
 
     async def test_select_device_creates_entry(self):

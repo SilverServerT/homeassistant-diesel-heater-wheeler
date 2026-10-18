@@ -378,7 +378,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
     @property
     def is_warm_drive_controller(self) -> bool:
         """Return whether the controller identifies itself as Warm Drive."""
-        return self._ble_device.name == "Air Heater"
+        stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
+        if stored in ("air", "water"):
+            return True
+        return (
+            (getattr(self._ble_device, "name", None) or "")
+            .replace("\x00", "")
+            .strip()
+            == "Air Heater"
+        )
 
     @property
     def is_dz06_neo(self) -> bool:
@@ -1890,7 +1898,18 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     # Continue anyway - will retry in _send_command if needed
 
             if self.is_dz06_neo:
+                self._logger.info(
+                    "Split FFF0 controller name=%r warm_drive=%s",
+                    getattr(self._ble_device, "name", None),
+                    self.is_warm_drive_controller,
+                )
                 if not await self._send_dz06_neo_configuration():
+                    self._logger.error(
+                        "Split FFF0 5C16 configuration read failed. Close the phone "
+                        "controller app, then set the controller code (Neo password) "
+                        "to %s unless you changed it in the app.",
+                        DEFAULT_NEO_PASSWORD,
+                    )
                     await self._cleanup_connection()
                     raise BleakError("DZ06 Neo configuration read failed")
                 if not await self._send_dz06_neo_run_settings():
@@ -2536,7 +2555,12 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         elif self._is_abba_device and self._abba_write_char:
             write_char = self._abba_write_char
             char_uuid = write_char.uuid
-            protocol_name = "ABBA"
+            if self.is_warm_drive_controller:
+                protocol_name = "Warm Drive"
+            elif self.is_dz06_neo:
+                protocol_name = "DZ06"
+            else:
+                protocol_name = "ABBA"
         else:
             write_char = self._characteristic
             char_uuid = write_char.uuid if write_char else "unknown"
@@ -2728,6 +2752,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
     async def _send_dz06_neo_board_info(self) -> None:
         """Read the unit metadata through Warm Drive's 0x5D command."""
+        self._logger.info("Warm Drive board-information request")
         now = dt_util.now()
         timestamp = int(now.timestamp()) + int((now.utcoffset() or timedelta()).total_seconds())
         packet = bytearray((0x29, 0x0D, 0x5D, 0))

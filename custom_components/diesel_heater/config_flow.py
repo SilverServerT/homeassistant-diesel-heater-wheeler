@@ -67,7 +67,7 @@ def _default_pin_for_discovery(discovery_info: BluetoothServiceInfoBleak) -> int
 
 def _is_warm_drive_device(discovery_info: BluetoothServiceInfoBleak) -> bool:
     """Return whether the device has Warm Drive's exact advertised name."""
-    return discovery_info.name == "Air Heater"
+    return (discovery_info.name or "").replace("\x00", "").strip() == "Air Heater"
 
 
 def _warm_drive_controller_type(
@@ -150,8 +150,10 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_NEO_PASSWORD, default_neo_password
                 ),
             }
-            if controller_type := _warm_drive_controller_type(self._discovery_info):
-                data[CONF_NEO_CONTROLLER_TYPE] = controller_type
+            if _is_warm_drive_device(self._discovery_info):
+                data[CONF_NEO_CONTROLLER_TYPE] = (
+                    _warm_drive_controller_type(self._discovery_info) or "air"
+                )
             return self.async_create_entry(
                 title=f"Vevor Heater {self._discovery_info.address[-5:].replace(':', '')}",
                 data=data,
