@@ -73,6 +73,8 @@ class VevorHeaterFan(FanEntity):
         # Locked while burn-off is active: fan writes the snapshotted set_level
         if self.coordinator.burnoff_active:
             return False
+        if getattr(self.coordinator, "is_dz06_neo", False):
+            return False
         if not self.coordinator.data.get("connected", False):
             return False
 
@@ -88,11 +90,15 @@ class VevorHeaterFan(FanEntity):
     def percentage(self) -> int | None:
         """Return the current speed percentage."""
         level = self.coordinator.data.get("set_level")
-        if level is None:
+        try:
+            level_key = str(int(level))
+        except (TypeError, ValueError):
+            return None
+        if level_key not in ORDERED_LEVELS:
             return None
 
         # Convert level (1-10) to percentage (0-100)
-        return ordered_list_item_to_percentage(ORDERED_LEVELS, str(level))
+        return ordered_list_item_to_percentage(ORDERED_LEVELS, level_key)
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the speed percentage."""
