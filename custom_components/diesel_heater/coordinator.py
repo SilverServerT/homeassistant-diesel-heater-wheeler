@@ -3699,6 +3699,22 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 await self.async_request_refresh()
             return success
 
+        if self.is_dz06_neo:
+            if mode not in (RUNNING_MODE_LEVEL, RUNNING_MODE_TEMPERATURE):
+                self._logger.warning(
+                    "DZ06/Warm Drive only supports Level and Temperature modes"
+                )
+                return False
+            _, target, altitude = self._neo_status_poll_settings()
+            run_type = 1 if mode == RUNNING_MODE_LEVEL else 2
+            self._logger.info(
+                "DZ06 native mode change run_type=%s target=%s altitude=%s",
+                run_type,
+                target,
+                altitude,
+            )
+            return await self._async_set_dz06_neo_control(run_type, target, altitude)
+
         # Standard modes (0-2)
         mode = max(0, min(2, mode))
         self._logger.info("Setting running mode to %d", mode)

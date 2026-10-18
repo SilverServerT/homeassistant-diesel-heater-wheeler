@@ -397,6 +397,32 @@ async def test_status_poll_uses_app_startup_settings() -> None:
 
 
 @pytest.mark.asyncio
+async def test_set_mode_temperature_uses_native_control() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "set_temp": 17,
+            "neo_run_type": 1,
+            "altitude": 1,
+            "neo_raw_state": 1,
+            "neo_min_target": 8,
+            "neo_max_target": 35,
+        }
+    )
+    response = bytearray(39)
+    response[:2], response[15], response[34] = b"Z%", 17, 2
+    coordinator._write_gatt = AsyncMock(
+        side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
+    )
+
+    assert await coordinator.async_set_mode(RUNNING_MODE_TEMPERATURE) is True
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[3] == 0x51
+    assert packet[4] == 2
+    assert packet[5] == 17
+
+
+@pytest.mark.asyncio
 async def test_set_level_does_not_send_legacy_gear_command() -> None:
     coordinator = coordinator_for_layout(True)
     coordinator._client = SimpleNamespace(is_connected=True)
