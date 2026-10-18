@@ -74,7 +74,7 @@
         },
         "data_description": {
           "temperature_offset": "Manual temperature calibration offset. Changes take effect within 30 seconds. Range: -20 to +20°C.",
-          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. Changes require integration reload.",
+          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory 0000 is entered as 0. Ignored by Warm Drive / MUDIRO. Changes reload the integration.",
           "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Changes require integration reload.",
           "preset_away_temp": "Temperature for Away preset (anti-freeze protection). Default: 8°C.",
           "preset_comfort_temp": "Temperature for Comfort preset (normal heating). Default: 21°C.",

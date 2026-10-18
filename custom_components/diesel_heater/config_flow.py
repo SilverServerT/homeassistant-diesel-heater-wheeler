@@ -367,14 +367,18 @@ class VevorHeaterOptionsFlowHandler(config_entries.OptionsFlow):
             current_external_sensor = None
 
         # Build schema - only show auto_offset_max if external sensor is configured
-        schema_dict = {
-            vol.Optional(
-                CONF_PIN,
-                default=self.config_entry.data.get(CONF_PIN, DEFAULT_PIN)
-            ): vol.All(
+        schema_dict = {}
+        if self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE) not in ("air", "water"):
+            schema_dict[
+                vol.Optional(
+                    CONF_PIN,
+                    default=self.config_entry.data.get(CONF_PIN, DEFAULT_PIN),
+                )
+            ] = vol.All(
                 vol.Coerce(int),
                 vol.Range(min=MIN_PIN, max=MAX_PIN),
-            ),
+            )
+        schema_dict.update({
             vol.Optional(
                 CONF_NEO_PASSWORD,
                 default=self.config_entry.data.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD),
@@ -429,7 +433,7 @@ class VevorHeaterOptionsFlowHandler(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-        }
+        })
 
         # Only show auto_offset_max if external sensor is configured
         if current_external_sensor:

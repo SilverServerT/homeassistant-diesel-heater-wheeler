@@ -737,6 +737,24 @@ class TestOptionsFlow:
         }
         assert CONF_PIN in schema_keys
 
+    async def test_warm_drive_options_hide_unused_pin_field(self):
+        flow = self._create_flow(
+            {
+                CONF_ADDRESS: MOCK_ADDRESS,
+                CONF_PIN: DEFAULT_PIN,
+                CONF_NEO_CONTROLLER_TYPE: "air",
+            }
+        )
+
+        result = await flow.async_step_init()
+
+        schema_keys = {
+            k.schema for k in result["data_schema"].schema.keys()
+            if hasattr(k, "schema")
+        }
+        assert CONF_PIN not in schema_keys
+        assert CONF_NEO_PASSWORD in schema_keys
+
     async def test_schema_has_preset_fields(self):
         flow = self._create_flow()
 
