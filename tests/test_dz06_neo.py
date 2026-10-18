@@ -125,6 +125,44 @@ def test_warm_drive_uses_nonconnectable_advertisement_name() -> None:
         assert coordinator.is_warm_drive_controller is True
 
 
+def test_mac_placeholder_name_is_not_a_real_advertisement() -> None:
+    coordinator = coordinator_for_layout(True, name="C8:17:F5:28:E7:9D")
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        return_value=SimpleNamespace(
+            name="C8:17:F5:28:E7:9D", manufacturer_data={}
+        ),
+    ):
+        assert coordinator._advertised_heater_name() == ""
+        assert coordinator.is_warm_drive_controller is False
+
+
+def test_5c16_identifies_nameless_split_fff0_as_warm_drive_air() -> None:
+    coordinator = coordinator_for_layout(True, name=None)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.hass = MagicMock()
+    coordinator.config_entry = SimpleNamespace(data={})
+    with patch(
+        "custom_components.diesel_heater.coordinator.bluetooth.async_last_service_info",
+        return_value=SimpleNamespace(
+            name="C8:17:F5:28:E7:9D", manufacturer_data={}
+        ),
+    ):
+        coordinator._notification_callback(FFF2, neo_config_response(device_type=1))
+        assert coordinator.data["neo_controller_type"] == "air"
+        assert coordinator.is_warm_drive_controller is True
+    coordinator.hass.config_entries.async_update_entry.assert_called_once()
+
+
+def test_5c16_does_not_reclassify_named_non_warm_drive_controller() -> None:
+    coordinator = coordinator_for_layout(True, name="Sunster Neo")
+    coordinator._notification_callback(FFF2, neo_config_response(device_type=1))
+    assert "neo_controller_type" not in coordinator.data
+    assert coordinator.is_warm_drive_controller is False
+
+
 def test_warm_drive_uses_manufacturer_record_when_name_missing() -> None:
     coordinator = coordinator_for_layout(True, name=None)
     coordinator.address = "C8:17:F5:28:E7:9D"

@@ -408,13 +408,32 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 return info
         return None
 
+    def _heater_address_compact(self) -> str:
+        """Return the heater MAC with separators removed."""
+        address = getattr(self, "address", None) or getattr(
+            self._ble_device, "address", ""
+        ) or ""
+        return str(address).replace(":", "").replace("-", "").upper()
+
+    def _is_real_local_name(self, name: str) -> bool:
+        """Return False for empty names and ESPHome MAC-as-name placeholders."""
+        if not name:
+            return False
+        compact = name.replace(":", "").replace("-", "").upper()
+        address = self._heater_address_compact()
+        return not address or compact != address
+
     def _advertised_heater_name(self) -> str:
-        """Prefer the live BLEDevice name, then HA's last Air Heater advertisement."""
-        cleaned = self._clean_ble_name(getattr(self._ble_device, "name", None))
-        if cleaned:
-            return cleaned
+        """Prefer a real BLE local name, ignoring MAC placeholders."""
         info = self._last_heater_service_info()
-        return self._clean_ble_name(getattr(info, "name", None) if info else None)
+        for candidate in (
+            getattr(self._ble_device, "name", None),
+            getattr(info, "name", None) if info else None,
+        ):
+            cleaned = self._clean_ble_name(candidate)
+            if self._is_real_local_name(cleaned):
+                return cleaned
+        return ""
 
     def _warm_drive_type_from_advertisement(self) -> str | None:
         """Return air/water from Warm Drive's 16-byte manufacturer record."""
@@ -430,6 +449,9 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         """Return whether the controller identifies itself as Warm Drive."""
         stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
         if stored in ("air", "water"):
+            return True
+        live = self.data.get("neo_controller_type")
+        if live in ("air", "water"):
             return True
         if self._advertised_heater_name() == "Air Heater":
             return True
@@ -2027,16 +2049,25 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                         "altitude": int.from_bytes(data[6:8], "big"),
                     }
                 )
+                self._logger.info(
+                    "DZ06 A5 run settings run_type=%s target=%s altitude=%s",
+                    self.data.get("neo_run_type"),
+                    self.data.get("set_temp"),
+                    self.data.get("altitude"),
+                )
                 self._neo_run_settings_received = True
             if len(data) == 24 and data[:2] == bytearray((0x5C, 0x16)):
                 minimum, maximum = data[4], data[5]
                 if minimum <= maximum:
                     self.data["neo_min_target"] = minimum
                     self.data["neo_max_target"] = maximum
-                if self.is_warm_drive_controller:
+                if data[2] in (1, 2) and (
+                    self.is_warm_drive_controller or not self._advertised_heater_name()
+                ):
                     self.data["neo_controller_type"] = (
                         "air" if data[2] == 1 else "water"
                     )
+                    self._remember_warm_drive_identity()
                 self._logger.info(
                     "DZ06 5C16 min=%s max=%s type_byte=%s warm_drive=%s",
                     self.data.get("neo_min_target"),
