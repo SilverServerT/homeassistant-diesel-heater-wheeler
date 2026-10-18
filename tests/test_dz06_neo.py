@@ -397,6 +397,15 @@ async def test_status_poll_uses_app_startup_settings() -> None:
 
 
 @pytest.mark.asyncio
+async def test_set_level_does_not_send_legacy_gear_command() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._client = SimpleNamespace(is_connected=True)
+    coordinator._write_gatt = AsyncMock()
+    assert await coordinator.async_set_level(2) is False
+    coordinator._write_gatt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_unsupported_neo_command_fails_closed() -> None:
     coordinator = coordinator_for_layout(True)
     coordinator._client = SimpleNamespace(is_connected=True)

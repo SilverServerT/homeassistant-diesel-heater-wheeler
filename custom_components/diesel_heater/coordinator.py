@@ -3488,6 +3488,13 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self._logger.info("Ignoring level change during burn-off")
             return False
 
+        if self.is_dz06_neo:
+            self._logger.warning(
+                "DZ06/Warm Drive has no legacy gear command (cmd=4). "
+                "Use climate target temperature; that sends native 0x51."
+            )
+            return False
+
         level = max(1, min(10, level))
         if self._protocol_mode == 5:  # ABBA/HeaterCC uses level up/down button commands
             current_level_raw = self.data.get("set_level")
