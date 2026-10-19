@@ -57,6 +57,35 @@ def _is_heatgenie_device(discovery_info: BluetoothServiceInfoBleak) -> bool:
     return "BOYGU" in name or bool(HEATGENIE_NAME_PATTERN.fullmatch(name))
 
 
+_PIN_VALIDATOR = vol.Any(
+    "",
+    vol.All(vol.Coerce(int), vol.Range(min=MIN_PIN, max=MAX_PIN)),
+)
+
+
+def _pin_marker(default: int | None) -> vol.Optional:
+    """Show a PIN field that can be left blank."""
+    if default is None:
+        return vol.Optional(CONF_PIN)
+    return vol.Optional(CONF_PIN, description={"suggested_value": default})
+
+
+def _store_pin(
+    data: dict[str, Any],
+    user_input: dict[str, Any],
+    fallback: int | None,
+) -> None:
+    """Store a PIN, or leave it unset when the field was cleared."""
+    if CONF_PIN not in user_input:
+        if fallback is not None:
+            data[CONF_PIN] = fallback
+        return
+    pin = user_input[CONF_PIN]
+    if pin in ("", None):
+        return
+    data[CONF_PIN] = int(pin)
+
+
 def _default_pin_for_discovery(discovery_info: BluetoothServiceInfoBleak) -> int:
     """Return the APK-defined default PIN for a discovered controller."""
     service_uuids = {uuid.lower() for uuid in discovery_info.service_uuids}
@@ -145,11 +174,15 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             data = {
                 CONF_ADDRESS: self._discovery_info.address,
-                CONF_PIN: user_input.get(CONF_PIN, default_pin),
                 CONF_NEO_PASSWORD: user_input.get(
                     CONF_NEO_PASSWORD, default_neo_password
                 ),
             }
+            _store_pin(
+                data,
+                user_input,
+                None if _is_warm_drive_device(self._discovery_info) else default_pin,
+            )
             if _is_warm_drive_device(self._discovery_info):
                 data[CONF_NEO_CONTROLLER_TYPE] = (
                     _warm_drive_controller_type(self._discovery_info) or "air"
@@ -164,13 +197,9 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema({
-                vol.Optional(
-                    CONF_PIN,
-                    default=default_pin,
-                ): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=MIN_PIN, max=MAX_PIN),
-                ),
+                _pin_marker(
+                    None if _is_warm_drive_device(self._discovery_info) else default_pin
+                ): _PIN_VALIDATOR,
                 vol.Optional(
                     CONF_NEO_PASSWORD,
                     default=default_neo_password,
@@ -197,13 +226,14 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._discovery_info = discovery_info
                 return await self.async_step_confirm()
 
+            data = {
+                CONF_ADDRESS: address,
+                CONF_NEO_PASSWORD: user_input.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD),
+            }
+            _store_pin(data, user_input, DEFAULT_PIN)
             return self.async_create_entry(
                 title=f"Vevor Heater {address[-5:].replace(':', '')}",
-                data={
-                    CONF_ADDRESS: address,
-                    CONF_PIN: user_input.get(CONF_PIN, DEFAULT_PIN),
-                    CONF_NEO_PASSWORD: user_input.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD),
-                },
+                data=data,
             )
 
         # Get current bluetooth devices
@@ -254,13 +284,7 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema({
                 vol.Required(CONF_ADDRESS): vol.In(devices),
-                vol.Optional(
-                    CONF_PIN,
-                    default=DEFAULT_PIN
-                ): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=MIN_PIN, max=MAX_PIN),
-                ),
+                _pin_marker(DEFAULT_PIN): _PIN_VALIDATOR,
                 vol.Optional(
                     CONF_NEO_PASSWORD,
                     default=DEFAULT_NEO_PASSWORD,
@@ -287,26 +311,23 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
 
+                data = {
+                    CONF_ADDRESS: address,
+                    CONF_NEO_PASSWORD: user_input.get(
+                        CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD
+                    ),
+                }
+                _store_pin(data, user_input, DEFAULT_PIN)
                 return self.async_create_entry(
                     title=f"Vevor Heater {address[-5:].replace(':', '')}",
-                    data={
-                        CONF_ADDRESS: address,
-                        CONF_PIN: user_input.get(CONF_PIN, DEFAULT_PIN),
-                        CONF_NEO_PASSWORD: user_input.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD),
-                    },
+                    data=data,
                 )
 
         return self.async_show_form(
             step_id="manual",
             data_schema=vol.Schema({
                 vol.Required(CONF_ADDRESS, description="Bluetooth MAC Address (e.g., A4:C1:37:24:B8:64)"): str,
-                vol.Optional(
-                    CONF_PIN,
-                    default=DEFAULT_PIN
-                ): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=MIN_PIN, max=MAX_PIN),
-                ),
+                _pin_marker(DEFAULT_PIN): _PIN_VALIDATOR,
                 vol.Optional(
                     CONF_NEO_PASSWORD,
                     default=DEFAULT_NEO_PASSWORD,
@@ -367,18 +388,9 @@ class VevorHeaterOptionsFlowHandler(config_entries.OptionsFlow):
             current_external_sensor = None
 
         # Build schema - only show auto_offset_max if external sensor is configured
-        schema_dict = {}
-        if self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE) not in ("air", "water"):
-            schema_dict[
-                vol.Optional(
-                    CONF_PIN,
-                    default=self.config_entry.data.get(CONF_PIN, DEFAULT_PIN),
-                )
-            ] = vol.All(
-                vol.Coerce(int),
-                vol.Range(min=MIN_PIN, max=MAX_PIN),
-            )
-        schema_dict.update({
+        stored_pin = self.config_entry.data.get(CONF_PIN)
+        schema_dict = {
+            _pin_marker(stored_pin if isinstance(stored_pin, int) else None): _PIN_VALIDATOR,
             vol.Optional(
                 CONF_NEO_PASSWORD,
                 default=self.config_entry.data.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD),
@@ -433,7 +445,7 @@ class VevorHeaterOptionsFlowHandler(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-        })
+        }
 
         # Only show auto_offset_max if external sensor is configured
         if current_external_sensor:
