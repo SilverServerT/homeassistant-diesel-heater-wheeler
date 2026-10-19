@@ -47,6 +47,7 @@ Control supported diesel air and water heaters from Home Assistant via Bluetooth
 - [Configuration](#configuration)
 - [Dashboard Cards](#dashboard-cards)
 - [Protocol Details](#protocol-details)
+- [Warm Drive since beta.25](#warm-drive-since-beta25)
 - [Changelog](#changelog)
 - [Contributing](#contributing)
 - [Support](#support)
@@ -685,6 +686,66 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | 39-40 | Startup/Shutdown Temp Diff | 255=N/A |
 | 42 | Auto Start/Stop | 0=Off, 1=On |
 | 44-45 | Remaining Run Time | uint16 LE, 65535=N/A |
+
+## Warm Drive since beta.25
+
+`v2.1.5-beta.30` is beta.25 plus four pamphlet-app settings. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+
+| Tag | Commit | Added |
+| --- | --- | --- |
+| `v2.1.5-beta.28` | `b73ef63` | Auto Start/Stop on `0x26` byte 14 |
+| `v2.1.5-beta.29` | `6594ecc` | Tank volume byte 15, max heat byte 13, pump size byte 16 |
+| `v2.1.5-beta.30` | `18fd66c` | PIN restored to the beta.25 field, on top of beta.29 |
+
+### What stayed the same
+
+- Split FFF0: FFF1 write, FFF2 notify. The name is not used to find the device.
+- Session open is still `29 0D 5C` with controller code `100000000` (`05 F5 E1 00`), then `5C16`, `29 0D FF`, `29 0D 5D` for Warm Drive, then the opcode-0 status poll.
+- Level and Temperature still use native run type `0x51` (1 = Level, 2 = Temperature).
+- An unnamed controller starts with Warm Drive false. `5C16` type byte `1` sets air and saves it. A saved air or water value is not corrected later.
+- The 16-byte manufacturer shortcut is unchanged.
+- A 20-second connect timeout still only stops the Home Assistant wait. It does not disconnect the ESPHome proxy slot.
+- Glow-plug power, `5C16` byte 12, is not read or written.
+- The PIN options field defaults to `1234`, range 0–9999. A missing PIN still becomes `1234` at runtime. That controller code in the `5C` frame is the separate Neo password, default `100000000`.
+
+`_modbus_crc16` is the beta.25 CRC16/MODBUS (init `0xFFFF`, polynomial `0xA001`, big-endian) used by the session packet, the status poll, and the new config write.
+
+### The 0x26 write
+
+Tank, max heat, pump size, and auto start share one writer. It echoes the last `5C16` and replaces a single byte. The frame is 20 bytes: opcode `0x26`, length `0x12`, `5C16` bytes 2–16, a trailing `1`, then the CRC.
+
+A change reads `5C16` first and aborts if that read fails or no config is stored. After a successful GATT write the new byte is stored locally. The confirm read does not roll that byte back if it fails. A confirm that does arrive replaces the stored config from the reply. The session clears the stored config on disconnect. The status refresh after the write is opcode 0, a poll, and it carries the current run type and target.
+
+| `5C16` byte | Meaning | Entity |
+| --- | --- | --- |
+| 13 | Work mode. `2` is max heat on. Off writes `1` | Max Heat |
+| 14 | Auto start. `1` on, `0` off | Auto Start/Stop |
+| 15 | Tank code 0–5 | Tank Volume |
+| 16 | Pump code 0–3 | Pump Size |
+
+The `5C16` log line includes auto start, max heat, and pump. It does not print the tank byte.
+
+### Controls
+
+Auto Start/Stop writes byte 14. The switch is available in Temperature mode after a value has been read, and the writer refuses the change in any other mode. Changing to Level does not clear the flag locally.
+
+Tank Volume on Warm Drive uses the pamphlet codes, not the legacy 5–50 L index: `0` = 5 L, `1` = 7 L, `2` = 9 L, `3` = 10 L, `4` = 15 L, `5` = 20 L. Other protocols still use command 16 and the old table.
+
+Max Heat is created for protocol mode 0 and for a coordinator already known to be Warm Drive. It stays unavailable until the session is up and byte 13 has been read.
+
+Pump Size is the existing pump select. On Warm Drive its name is Pump Size and the options are `0` = 16 mL, `1` = 22 mL, `2` = 28 mL, `3` = 32 mL, written to byte 16. Legacy controllers keep the name Pump Type, the microlitre labels, and command 17.
+
+### Checked on the MUDIRO
+
+On `C8:17:F5:28:E7:9D` with beta.30, the 23:24 session completed `5C16` (8–35°C, type 1, auto start off, max heat off, pump 1), the `A5` startup read (temperature mode, 15°C, altitude 1), the `5D` board read, and the status poll `a5090100020f00010189a7`. Setting tank code 0 at 23:40 sent:
+
+```text
+26 12 01 01 08 23 0f 37 06 0e 11 94 05 01 00 00 01 01 2a f0
+```
+
+Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same logged fields.
+
+Ventilation, cleaning, oil type, heat reset and stop temperatures, oil frequency, fan RPM limits, and glow-plug power are still not sent.
 
 ## Changelog
 
