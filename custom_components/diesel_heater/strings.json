@@ -18,8 +18,8 @@
         },
         "data_description": {
           "temperature_offset": "Calibration offset for interior temperature sensor. Use negative value if readings are too high, positive if too low. Range: -20 to +20°C.",
-          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here. Leave this field empty for MUDIRO.",
-          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default."
+          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here.",
+          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default. Leave PIN at 1234 for Warm Drive."
         }
       },
       "user": {
@@ -32,8 +32,8 @@
         "description": "Select your Diesel Heater from the list.",
         "data_description": {
           "temperature_offset": "Calibration offset for interior temperature sensor. Use negative value if readings are too high, positive if too low. Range: -20 to +20°C.",
-          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here. Leave this field empty for MUDIRO.",
-          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default."
+          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here.",
+          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default. Leave PIN at 1234 for Warm Drive."
         }
       },
       "manual": {
@@ -46,8 +46,8 @@
         "description": "Enter the Bluetooth MAC address of your heater (e.g., A4:C1:37:24:B8:64). You can find this in the Bluetooth logs or using a BLE scanner app.",
         "data_description": {
           "temperature_offset": "Calibration offset for interior temperature sensor. Use negative value if readings are too high, positive if too low. Range: -20 to +20°C.",
-          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here. Leave this field empty for MUDIRO.",
-          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default."
+          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. If you changed the PIN in the heater app, enter your custom PIN here.",
+          "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Sunster Neo uses the same default. Leave PIN at 1234 for Warm Drive."
         }
       }
     },
@@ -74,7 +74,7 @@
         },
         "data_description": {
           "temperature_offset": "Manual temperature calibration offset. Changes take effect within 30 seconds. Range: -20 to +20°C.",
-          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory 0000 is entered as 0. Leave this field empty for MUDIRO. Changes reload the integration.",
+          "pin": "PIN for heater authentication. Default is usually 1234. Hcalory MVP2 factory PIN 0000 is entered as 0. Changes require integration reload.",
           "neo_password": "Numeric controller code. Warm Drive / MUDIRO factory value is 100000000. Changes require integration reload.",
           "preset_away_temp": "Temperature for Away preset (anti-freeze protection). Default: 8°C.",
           "preset_comfort_temp": "Temperature for Comfort preset (normal heating). Default: 21°C.",

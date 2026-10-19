@@ -286,24 +286,6 @@ class TestConfirmStep:
         assert result["type"] == "create_entry"
         assert result["data"][CONF_PIN] == 5678
 
-    async def test_blank_pin_is_not_stored(self):
-        flow = VevorHeaterConfigFlow()
-        flow._discovery_info = _make_ble_discovery()
-
-        result = await flow.async_step_confirm(user_input={CONF_PIN: ""})
-
-        assert result["type"] == "create_entry"
-        assert CONF_PIN not in result["data"]
-
-    async def test_warm_drive_discovery_leaves_pin_empty(self):
-        flow = VevorHeaterConfigFlow()
-        flow._discovery_info = _make_ble_discovery(name="Air Heater")
-
-        result = await flow.async_step_confirm(user_input={})
-
-        assert result["type"] == "create_entry"
-        assert CONF_PIN not in result["data"]
-
     async def test_title_uses_last_chars_of_address(self):
         flow = VevorHeaterConfigFlow()
         flow._discovery_info = _make_ble_discovery(address="AA:BB:CC:DD:EE:FF")
@@ -755,24 +737,6 @@ class TestOptionsFlow:
         }
         assert CONF_PIN in schema_keys
 
-    async def test_warm_drive_options_keep_pin_field(self):
-        flow = self._create_flow(
-            {
-                CONF_ADDRESS: MOCK_ADDRESS,
-                CONF_PIN: DEFAULT_PIN,
-                CONF_NEO_CONTROLLER_TYPE: "air",
-            }
-        )
-
-        result = await flow.async_step_init()
-
-        schema_keys = {
-            k.schema for k in result["data_schema"].schema.keys()
-            if hasattr(k, "schema")
-        }
-        assert CONF_PIN in schema_keys
-        assert CONF_NEO_PASSWORD in schema_keys
-
     async def test_schema_has_preset_fields(self):
         flow = self._create_flow()
 
@@ -835,20 +799,6 @@ class TestOptionsFlow:
         call_kwargs = flow.hass.config_entries.async_update_entry.call_args
         new_data = call_kwargs[1]["data"]
         assert new_data[CONF_PIN] == 9999
-
-    async def test_blank_pin_is_removed(self):
-        flow = self._create_flow()
-
-        result = await flow.async_step_init(user_input={
-            CONF_PIN: "",
-            CONF_PRESET_AWAY_TEMP: DEFAULT_PRESET_AWAY_TEMP,
-            CONF_PRESET_COMFORT_TEMP: DEFAULT_PRESET_COMFORT_TEMP,
-        })
-
-        assert result["type"] == "create_entry"
-        call_kwargs = flow.hass.config_entries.async_update_entry.call_args
-        new_data = call_kwargs[1]["data"]
-        assert CONF_PIN not in new_data
 
     async def test_updates_preset_temperatures(self):
         flow = self._create_flow()

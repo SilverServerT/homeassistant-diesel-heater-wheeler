@@ -1,5 +1,3 @@
-> **MUDIRO:** leave the PIN field empty when adding the Diesel Heater in Home Assistant.
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/Spettacolo83/homeassistant-diesel-heater/main/docs/images/logo@2x.png" alt="Diesel Heater" height="120"/>
 </p>
