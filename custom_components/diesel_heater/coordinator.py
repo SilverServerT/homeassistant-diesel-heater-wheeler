@@ -172,6 +172,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._notification_data: bytearray | None = None
         self._neo_config_received = False
         self._neo_run_settings_received = False
+        self._warm_drive_board_config: bytearray | None = None
         # Get passkey from config, default to 1234 (factory default for most heaters)
         self._passkey = config_entry.data.get(CONF_PIN, DEFAULT_PIN)
         self._neo_password = config_entry.data.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD)
@@ -2068,11 +2069,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                         "air" if data[2] == 1 else "water"
                     )
                     self._remember_warm_drive_identity()
+                if self.is_warm_drive_controller:
+                    self._warm_drive_board_config = bytearray(data)
+                    self.data["auto_start_stop"] = data[14] == 1
                 self._logger.info(
-                    "DZ06 5C16 min=%s max=%s type_byte=%s warm_drive=%s",
+                    "DZ06 5C16 min=%s max=%s type_byte=%s auto_start=%s warm_drive=%s",
                     self.data.get("neo_min_target"),
                     self.data.get("neo_max_target"),
                     data[2],
+                    self.data.get("auto_start_stop"),
                     self.is_warm_drive_controller,
                 )
                 self._neo_config_received = True
@@ -2502,6 +2507,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 self._v21_handshake_authenticated = None
                 # Reset time sync flag to trigger auto-sync on next connection
                 self._time_synced_this_session = False
+                self._warm_drive_board_config = None
 
     async def _async_password_handshake(self, max_retries: int = 3) -> bool:
         """Send password handshake with retry logic (@Xev optimizations, issue #34).
@@ -2710,18 +2716,36 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         return packet
 
     @staticmethod
+    def _modbus_crc16(payload: bytes) -> bytes:
+        """Return CRC16/MODBUS as two big-endian bytes."""
+        crc = 0xFFFF
+        for value in payload:
+            crc ^= value
+            for _ in range(8):
+                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+        return crc.to_bytes(2, "big")
+
+    @staticmethod
     def _neo_packet(opcode: int, run_type: int, target: int, altitude: int) -> bytearray:
         """Build a Sunster Neo control packet with CRC16/MODBUS."""
         packet = bytearray((0xA5, 0x09, 0x01, opcode, run_type, target))
         packet.extend(altitude.to_bytes(2, "big"))
         packet.append(1)
-        crc = 0xFFFF
-        for value in packet:
-            crc ^= value
-            for _ in range(8):
-                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-        packet.extend(crc.to_bytes(2, "big"))
+        packet.extend(VevorHeaterCoordinator._modbus_crc16(packet))
         return packet
+
+    def _warm_drive_auto_start_packet(self, enabled: bool) -> bytearray | None:
+        """Build the pamphlet-app 0x26 config write, echoing the last 5C16 block."""
+        config = self._warm_drive_board_config
+        if config is None or len(config) < 17:
+            return None
+        body = bytearray(18)
+        body[0], body[1] = 0x26, 0x12
+        body[2:17] = config[2:17]
+        body[14] = 1 if enabled else 0
+        body[17] = 1
+        body.extend(self._modbus_crc16(body))
+        return body
 
     def _neo_control_settings(
         self, use_startup_defaults: bool = False
@@ -2887,12 +2911,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return False
         packet.extend(password.to_bytes(4, "big"))
         packet.append(1)
-        crc = 0xFFFF
-        for value in packet:
-            crc ^= value
-            for _ in range(8):
-                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-        packet.extend(crc.to_bytes(2, "big"))
+        packet.extend(self._modbus_crc16(packet))
         self._notification_data = None
         self._neo_config_received = False
         await self._write_gatt(packet)
@@ -3724,13 +3743,16 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         return success
 
     async def async_set_auto_start_stop(self, enabled: bool) -> None:
-        """Set Automatic Start/Stop mode (cmd 18).
+        """Set Automatic Start/Stop.
 
-        When enabled in Temperature mode, the heater will completely stop
-        when the room temperature reaches 2°C above the target, and restart
-        when it drops 2°C below the target.
+        Warm Drive uses the pamphlet-app 0x26 config write. Other protocols
+        send command 18. When enabled in Temperature mode, the heater stops
+        above the target and restarts below it.
         """
         self._logger.info("Setting Auto Start/Stop to %s", "enabled" if enabled else "disabled")
+        if self.is_warm_drive_controller:
+            await self._async_set_warm_drive_auto_start_stop(enabled)
+            return
         if (
             self._protocol_mode == 6
             and isinstance(self._protocol, ProtocolCBFF)
@@ -3743,6 +3765,46 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         success = await self._send_command(18, 1 if enabled else 0)
         if success:
             await self.async_request_refresh()
+
+    async def _async_set_warm_drive_auto_start_stop(self, enabled: bool) -> None:
+        """Toggle Warm Drive Auto Start/Stop through the pamphlet-app 0x26 write."""
+        if self.data.get("running_mode") != RUNNING_MODE_TEMPERATURE:
+            self._logger.warning(
+                "Warm Drive Auto Start/Stop is only used in Temperature mode"
+            )
+            return
+        if self._client is not None and not await self._send_dz06_neo_configuration():
+            self._logger.warning(
+                "Warm Drive Auto Start/Stop blocked: 5C16 refresh failed"
+            )
+            return
+        packet = self._warm_drive_auto_start_packet(enabled)
+        if packet is None:
+            self._logger.warning(
+                "Warm Drive Auto Start/Stop blocked until a 5C16 config frame is stored"
+            )
+            return
+        try:
+            await self._write_gatt(packet)
+        except Exception as err:
+            self._logger.warning("Warm Drive Auto Start/Stop write failed: %s", err)
+            return
+        if self._warm_drive_board_config is not None:
+            self._warm_drive_board_config[14] = 1 if enabled else 0
+        self.data["auto_start_stop"] = enabled
+        if self._client is not None:
+            try:
+                confirmed = await self._send_dz06_neo_configuration()
+            except Exception as err:
+                self._logger.warning(
+                    "Warm Drive Auto Start/Stop confirm read failed: %s", err
+                )
+                confirmed = False
+            if not confirmed:
+                self._logger.warning(
+                    "Warm Drive Auto Start/Stop write sent, but 5C16 confirm failed"
+                )
+        await self.async_request_refresh()
 
     async def async_sync_time(self) -> bool:
         """Synchronize time only through a protocol's app-backed command."""
