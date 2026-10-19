@@ -257,6 +257,24 @@ TANK_VOLUME_OPTIONS: Final = {
     10: "50 L",
 }
 
+# Pamphlet app oilCapacityRead codes written to 0x26 byte 15.
+WARM_DRIVE_TANK_VOLUME_OPTIONS: Final = {
+    0: "5 L",
+    1: "7 L",
+    2: "9 L",
+    3: "10 L",
+    4: "15 L",
+    5: "20 L",
+}
+
+# Pamphlet app oilFlowRead codes written to 0x26 byte 16.
+WARM_DRIVE_PUMP_SIZE_OPTIONS: Final = {
+    0: "16 mL",
+    1: "22 mL",
+    2: "28 mL",
+    3: "32 mL",
+}
+
 # Pump type options (byte 29) - verified by @Xev testing
 # Values 20/21 indicate RF433 remote status (not pump type)
 PUMP_TYPE_OPTIONS: Final = {

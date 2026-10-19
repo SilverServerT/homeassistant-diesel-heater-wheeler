@@ -263,6 +263,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             "heater_offset": 0,  # Current offset sent to heater (cmd 20)
             "connected": False,
             "auto_start_stop": None,  # Automatic Start/Stop flag (byte 31)
+            "max_heat": None,  # Warm Drive 5C16 byte 13: 2 = max heat on
             "auto_offset_enabled": False,  # Auto offset adjustment enabled
             # Configuration settings (bytes 26-30)
             "language": None,  # byte 26: Voice notification language
@@ -2072,12 +2073,17 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 if self.is_warm_drive_controller:
                     self._warm_drive_board_config = bytearray(data)
                     self.data["auto_start_stop"] = data[14] == 1
+                    self.data["tank_volume"] = data[15]
+                    self.data["max_heat"] = data[13] == 2
+                    self.data["pump_type"] = data[16]
                 self._logger.info(
-                    "DZ06 5C16 min=%s max=%s type_byte=%s auto_start=%s warm_drive=%s",
+                    "DZ06 5C16 min=%s max=%s type_byte=%s auto_start=%s max_heat=%s pump=%s warm_drive=%s",
                     self.data.get("neo_min_target"),
                     self.data.get("neo_max_target"),
                     data[2],
                     self.data.get("auto_start_stop"),
+                    self.data.get("max_heat"),
+                    self.data.get("pump_type"),
                     self.is_warm_drive_controller,
                 )
                 self._neo_config_received = True
@@ -2734,18 +2740,65 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         packet.extend(VevorHeaterCoordinator._modbus_crc16(packet))
         return packet
 
-    def _warm_drive_auto_start_packet(self, enabled: bool) -> bytearray | None:
-        """Build the pamphlet-app 0x26 config write, echoing the last 5C16 block."""
+    def _warm_drive_config_packet(self, overrides: dict[int, int]) -> bytearray | None:
+        """Build a pamphlet-app 0x26 write, echoing 5C16 and replacing given bytes."""
         config = self._warm_drive_board_config
         if config is None or len(config) < 17:
             return None
         body = bytearray(18)
         body[0], body[1] = 0x26, 0x12
         body[2:17] = config[2:17]
-        body[14] = 1 if enabled else 0
+        for index, value in overrides.items():
+            if not 2 <= index <= 16:
+                return None
+            body[index] = value & 0xFF
         body[17] = 1
         body.extend(self._modbus_crc16(body))
         return body
+
+    def _warm_drive_auto_start_packet(self, enabled: bool) -> bytearray | None:
+        """Build the pamphlet-app 0x26 config write, echoing the last 5C16 block."""
+        return self._warm_drive_config_packet({14: 1 if enabled else 0})
+
+    async def _async_write_warm_drive_config(
+        self,
+        overrides: dict[int, int],
+        data_updates: dict[str, Any],
+        *,
+        action: str,
+    ) -> None:
+        """Echo 5C16 in a 0x26 write and keep the new bytes after the write is sent."""
+        if self._client is not None and not await self._send_dz06_neo_configuration():
+            self._logger.warning("Warm Drive %s blocked: 5C16 refresh failed", action)
+            return
+        packet = self._warm_drive_config_packet(overrides)
+        if packet is None:
+            self._logger.warning(
+                "Warm Drive %s blocked until a 5C16 config frame is stored", action
+            )
+            return
+        try:
+            await self._write_gatt(packet)
+        except Exception as err:
+            self._logger.warning("Warm Drive %s write failed: %s", action, err)
+            return
+        if self._warm_drive_board_config is not None:
+            for index, value in overrides.items():
+                self._warm_drive_board_config[index] = value & 0xFF
+        self.data.update(data_updates)
+        if self._client is not None:
+            try:
+                confirmed = await self._send_dz06_neo_configuration()
+            except Exception as err:
+                self._logger.warning(
+                    "Warm Drive %s confirm read failed: %s", action, err
+                )
+                confirmed = False
+            if not confirmed:
+                self._logger.warning(
+                    "Warm Drive %s write sent, but 5C16 confirm failed", action
+                )
+        await self.async_request_refresh()
 
     def _neo_control_settings(
         self, use_startup_defaults: bool = False
@@ -3773,38 +3826,11 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 "Warm Drive Auto Start/Stop is only used in Temperature mode"
             )
             return
-        if self._client is not None and not await self._send_dz06_neo_configuration():
-            self._logger.warning(
-                "Warm Drive Auto Start/Stop blocked: 5C16 refresh failed"
-            )
-            return
-        packet = self._warm_drive_auto_start_packet(enabled)
-        if packet is None:
-            self._logger.warning(
-                "Warm Drive Auto Start/Stop blocked until a 5C16 config frame is stored"
-            )
-            return
-        try:
-            await self._write_gatt(packet)
-        except Exception as err:
-            self._logger.warning("Warm Drive Auto Start/Stop write failed: %s", err)
-            return
-        if self._warm_drive_board_config is not None:
-            self._warm_drive_board_config[14] = 1 if enabled else 0
-        self.data["auto_start_stop"] = enabled
-        if self._client is not None:
-            try:
-                confirmed = await self._send_dz06_neo_configuration()
-            except Exception as err:
-                self._logger.warning(
-                    "Warm Drive Auto Start/Stop confirm read failed: %s", err
-                )
-                confirmed = False
-            if not confirmed:
-                self._logger.warning(
-                    "Warm Drive Auto Start/Stop write sent, but 5C16 confirm failed"
-                )
-        await self.async_request_refresh()
+        await self._async_write_warm_drive_config(
+            {14: 1 if enabled else 0},
+            {"auto_start_stop": enabled},
+            action="Auto Start/Stop",
+        )
 
     async def async_sync_time(self) -> bool:
         """Synchronize time only through a protocol's app-backed command."""
@@ -3998,14 +4024,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_set_tank_volume(self, volume_index: int) -> None:
-        """Set tank volume by index (cmd 16).
+        """Set tank volume.
 
-        The heater uses index-based values, not actual liters:
-        0=None, 1=5L, 2=10L, 3=15L, 4=20L, 5=25L, 6=30L, 7=35L, 8=40L, 9=45L, 10=50L
-
-        Args:
-            volume_index: Tank volume index (0-10)
+        Warm Drive writes pamphlet oil-capacity code into 0x26 byte 15.
+        Other protocols use legacy command 16:
+        0=None, 1=5L, 2=10L, 3=15L, 4=20L, 5=25L, 6=30L, 7=35L, 8=40L, 9=45L, 10=50L.
         """
+        if self.is_warm_drive_controller:
+            await self._async_set_warm_drive_tank_volume(volume_index)
+            return
         volume_index = max(0, min(10, volume_index))
         self._logger.info("⛽ Setting tank volume to index %d (cmd 16)", volume_index)
         success = await self._send_command(16, volume_index)
@@ -4016,14 +4043,48 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         else:
             self._logger.warning("❌ Failed to set tank volume")
 
-    async def async_set_pump_type(self, pump_type: int) -> None:
-        """Set oil pump type (cmd 17).
+    async def _async_set_warm_drive_tank_volume(self, volume_index: int) -> None:
+        """Write the pamphlet oil-capacity code without touching the other config bytes."""
+        code = max(0, min(5, int(volume_index)))
+        self._logger.info(
+            "⛽ Setting Warm Drive tank volume to code %d (0x26 byte 15)", code
+        )
+        await self._async_write_warm_drive_config(
+            {15: code},
+            {"tank_volume": code},
+            action="tank volume",
+        )
 
-        Pump types: 0=16µl, 1=22µl, 2=28µl, 3=32µl
+    async def async_set_max_heat(self, enabled: bool) -> None:
+        """Set Warm Drive max heat through 0x26 byte 13.
 
-        Args:
-            pump_type: Pump type (0-3)
+        The pamphlet app selects the icon when the stored value is 2 and
+        writes 1 to turn it off.
         """
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Max Heat is only available on Warm Drive controllers")
+            return
+        value = 2 if enabled else 1
+        self._logger.info(
+            "Setting Warm Drive max heat to %s (0x26 byte 13)",
+            "on" if enabled else "off",
+        )
+        await self._async_write_warm_drive_config(
+            {13: value},
+            {"max_heat": enabled},
+            action="max heat",
+        )
+
+    async def async_set_pump_type(self, pump_type: int) -> None:
+        """Set oil pump type.
+
+        Warm Drive writes the pamphlet oil-flow code into 0x26 byte 16:
+        0=16 mL, 1=22 mL, 2=28 mL, 3=32 mL.
+        Other protocols use legacy command 17 with the same codes.
+        """
+        if self.is_warm_drive_controller is True:
+            await self._async_set_warm_drive_pump_size(pump_type)
+            return
         pump_type = max(0, min(3, pump_type))
         self._logger.info("🔧 Setting pump type to %d (cmd 17)", pump_type)
         success = await self._send_command(17, pump_type)
@@ -4033,6 +4094,18 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             await self.async_request_refresh()
         else:
             self._logger.warning("❌ Failed to set pump type")
+
+    async def _async_set_warm_drive_pump_size(self, pump_type: int) -> None:
+        """Write the pamphlet pump stroke without touching the other config bytes."""
+        code = max(0, min(3, int(pump_type)))
+        self._logger.info(
+            "Setting Warm Drive pump size to code %d (0x26 byte 16)", code
+        )
+        await self._async_write_warm_drive_config(
+            {16: code},
+            {"pump_type": code},
+            action="pump size",
+        )
 
     async def async_set_backlight(self, level: int) -> None:
         """Set display backlight brightness (cmd 21).

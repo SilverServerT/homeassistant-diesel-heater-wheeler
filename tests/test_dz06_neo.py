@@ -20,7 +20,11 @@ from custom_components.diesel_heater.const import (
     RUNNING_STEP_VENTILATION,
 )
 from custom_components.diesel_heater.coordinator import VevorHeaterCoordinator
-from custom_components.diesel_heater.switch import VevorAutoStartStopSwitch
+from custom_components.diesel_heater.select import VevorHeaterPumpTypeSelect
+from custom_components.diesel_heater.switch import (
+    VevorAutoStartStopSwitch,
+    VevorMaxHeatSwitch,
+)
 
 from . import conftest  # noqa: F401
 
@@ -35,6 +39,8 @@ def neo_config_response(
     auto_start: int = 0,
     min_fan: int = 1600,
     max_fan: int = 4500,
+    work_mode: int = 0,
+    pump: int = 0,
 ) -> bytearray:
     """Build the full 0x5C/0x16 configuration frame parsed by the Neo app."""
     frame = bytearray(24)
@@ -43,7 +49,9 @@ def neo_config_response(
     frame[4], frame[5] = minimum, maximum
     frame[8:10] = min_fan.to_bytes(2, "big")
     frame[10:12] = max_fan.to_bytes(2, "big")
+    frame[13] = work_mode
     frame[14] = auto_start
+    frame[16] = pump
     return frame
 
 
@@ -841,6 +849,115 @@ def test_warm_drive_auto_start_packet_echoes_5c16_and_flips_flag() -> None:
     assert packet[15:17] == frame[15:17]
     assert packet[17] == 1
     assert packet.hex() == "261201000824000006401194000001000001578b"
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_tank_volume_writes_0x26_byte_15() -> None:
+    """Pamphlet oil capacity is 0x26 byte 15, not legacy command 16."""
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(FFF2, neo_config_response(auto_start=1))
+    assert coordinator.data["tank_volume"] == 0
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_tank_volume(3)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[14] == 1
+    assert packet[15] == 3
+    assert packet[17] == 1
+    assert coordinator.data["tank_volume"] == 3
+    assert coordinator._warm_drive_board_config[15] == 3
+
+
+def test_warm_drive_5c16_reads_max_heat_and_pump_size() -> None:
+    """Byte 13 is max heat and byte 16 is the pump stroke."""
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(work_mode=2, pump=1, auto_start=0)
+    )
+
+    assert coordinator.data["max_heat"] is True
+    assert coordinator.data["pump_type"] == 1
+
+    coordinator._notification_callback(FFF2, neo_config_response(work_mode=1, pump=0))
+    assert coordinator.data["max_heat"] is False
+    assert coordinator.data["pump_type"] == 0
+
+
+def test_warm_drive_max_heat_switch_follows_byte_13() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.data["connected"] = True
+    coordinator._notification_callback(FFF2, neo_config_response(work_mode=2))
+
+    switch = VevorMaxHeatSwitch(coordinator)
+    assert switch.available is True
+    assert switch.is_on is True
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_max_heat_writes_0x26_byte_13() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(work_mode=1, auto_start=1, pump=3)
+    )
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_max_heat(True)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[13] == 2
+    assert packet[14] == 1
+    assert packet[16] == 3
+    assert packet[17] == 1
+    assert coordinator.data["max_heat"] is True
+    assert coordinator._warm_drive_board_config[13] == 2
+
+    await coordinator.async_set_max_heat(False)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[13] == 1
+    assert coordinator.data["max_heat"] is False
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_max_heat_keeps_state_on_write_failure() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(FFF2, neo_config_response(work_mode=1))
+    coordinator._write_gatt = AsyncMock(side_effect=OSError("gatt"))
+
+    await coordinator.async_set_max_heat(True)
+
+    assert coordinator.data["max_heat"] is False
+    assert coordinator._warm_drive_board_config[13] == 1
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_pump_size_writes_0x26_byte_16() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.data["connected"] = True
+    coordinator._notification_callback(
+        FFF2, neo_config_response(work_mode=2, pump=0, auto_start=1)
+    )
+    coordinator._write_gatt = AsyncMock()
+    select = VevorHeaterPumpTypeSelect(coordinator)
+
+    assert select.name == "Pump Size"
+    assert select.options == ["16 mL", "22 mL", "28 mL", "32 mL"]
+    assert select.current_option == "16 mL"
+
+    await coordinator.async_set_pump_type(2)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[13] == 2
+    assert packet[14] == 1
+    assert packet[16] == 2
+    assert packet[17] == 1
+    assert coordinator.data["pump_type"] == 2
+    assert select.current_option == "28 mL"
 
 
 @pytest.mark.asyncio

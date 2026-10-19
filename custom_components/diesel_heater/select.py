@@ -17,6 +17,7 @@ from .const import (
     HIGH_ALTITUDE_MODE_OPTIONS,
     LANGUAGE_OPTIONS,
     PUMP_TYPE_OPTIONS,
+    WARM_DRIVE_PUMP_SIZE_OPTIONS,
     RUNNING_MODE_LEVEL,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
@@ -24,6 +25,7 @@ from .const import (
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_VENTILATION,
     TANK_VOLUME_OPTIONS,
+    WARM_DRIVE_TANK_VOLUME_OPTIONS,
 )
 from .coordinator import VevorHeaterCoordinator
 
@@ -281,6 +283,24 @@ class VevorHeaterPumpTypeSelect(SelectEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(PUMP_TYPE_OPTIONS.values())
 
+    def _pump_options(self) -> dict[int, str]:
+        """Return the pump table for the active controller."""
+        if getattr(self.coordinator, "is_warm_drive_controller", False) is True:
+            return WARM_DRIVE_PUMP_SIZE_OPTIONS
+        return PUMP_TYPE_OPTIONS
+
+    @property
+    def name(self) -> str:
+        """Return Pump Size on Warm Drive and Pump Type on legacy controllers."""
+        if getattr(self.coordinator, "is_warm_drive_controller", False) is True:
+            return "Pump Size"
+        return "Pump Type"
+
+    @property
+    def options(self) -> list[str]:
+        """Return pump sizes the active controller accepts."""
+        return list(self._pump_options().values())
+
     def __init__(self, coordinator: VevorHeaterCoordinator) -> None:
         """Initialize the select entity."""
         self.coordinator = coordinator
@@ -306,14 +326,14 @@ class VevorHeaterPumpTypeSelect(SelectEntity):
         """Return the current pump type."""
         pump_type = self.coordinator.data.get("pump_type")
         if pump_type is not None:
-            return PUMP_TYPE_OPTIONS.get(pump_type, f"Type {pump_type}")
+            return self._pump_options().get(pump_type, f"Type {pump_type}")
         return None
 
     async def async_select_option(self, option: str) -> None:
         """Change the pump type."""
         # Find the pump type code for the selected option
         pump_code = None
-        for code, name in PUMP_TYPE_OPTIONS.items():
+        for code, name in self._pump_options().items():
             if name == option:
                 pump_code = code
                 break
@@ -344,6 +364,17 @@ class VevorHeaterTankVolumeSelect(SelectEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(TANK_VOLUME_OPTIONS.values())
 
+    def _volume_options(self) -> dict[int, str]:
+        """Return the tank table for the active controller."""
+        if getattr(self.coordinator, "is_warm_drive_controller", False) is True:
+            return WARM_DRIVE_TANK_VOLUME_OPTIONS
+        return TANK_VOLUME_OPTIONS
+
+    @property
+    def options(self) -> list[str]:
+        """Return tank sizes the active controller accepts."""
+        return list(self._volume_options().values())
+
     def __init__(self, coordinator: VevorHeaterCoordinator) -> None:
         """Initialize the select entity."""
         self.coordinator = coordinator
@@ -364,10 +395,11 @@ class VevorHeaterTankVolumeSelect(SelectEntity):
     def current_option(self) -> str | None:
         """Return the current tank volume."""
         tank_volume = self.coordinator.data.get("tank_volume")
+        options = self._volume_options()
         if tank_volume is not None:
             # Return exact match or closest option
-            if tank_volume in TANK_VOLUME_OPTIONS:
-                return TANK_VOLUME_OPTIONS[tank_volume]
+            if tank_volume in options:
+                return options[tank_volume]
             # If not an exact match, show the raw value
             return f"{tank_volume} L"
         return None
@@ -376,7 +408,7 @@ class VevorHeaterTankVolumeSelect(SelectEntity):
         """Change the tank volume."""
         # Find the volume value for the selected option
         volume = None
-        for vol, name in TANK_VOLUME_OPTIONS.items():
+        for vol, name in self._volume_options().items():
             if name == option:
                 volume = vol
                 break
