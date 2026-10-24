@@ -697,7 +697,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.29` | `6594ecc` | Tank volume byte 15, max heat byte 13, pump size byte 16 |
 | `v2.1.5-beta.30` | `18fd66c` | PIN restored to the beta.25 field, on top of beta.29 |
 | `v2.1.5-beta.31` | `e9e0568` | Verified MUDIRO 5 kW Warm Drive build record |
-| `v2.1.5-beta.32` | | Warm Drive Level 1–10 via native `0x51` run type 1 |
+| `v2.1.5-beta.32` | `148b915` | Warm Drive Level 1–10 via native `0x51` run type 1 |
 
 ### What stayed the same
 
