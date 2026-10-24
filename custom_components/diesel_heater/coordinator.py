@@ -2187,7 +2187,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 }
                 if run_type == 1:
                     status["set_gear"] = self._warm_drive_wire_to_gear(data[15])
-                else:
+                elif data[15] > 0:
                     status["set_temp"] = self._dz06_neo_display_temperature(data[15])
                 self.data.update(status)
                 raw_state = data[3]

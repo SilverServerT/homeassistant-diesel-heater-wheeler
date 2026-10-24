@@ -30,6 +30,7 @@ from .const import (
     DEFAULT_PRESET_AWAY_TEMP,
     DEFAULT_PRESET_COMFORT_TEMP,
     DOMAIN,
+    RUNNING_MODE_LEVEL,
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_SELF_TEST,
     RUNNING_STEP_IGNITION,
@@ -59,6 +60,7 @@ class VevorHeaterClimate(
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_translation_key = "climate"
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
@@ -153,7 +155,19 @@ class VevorHeaterClimate(
         if self.coordinator.burnoff_active:
             return ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
         if self.coordinator.protocol_mode != 9:
-            return self._attr_supported_features
+            features = self._attr_supported_features
+            if (
+                self.coordinator.is_dz06_neo
+                or self.coordinator.is_warm_drive_controller
+            ) and (
+                self.coordinator.data.get("running_mode") == RUNNING_MODE_LEVEL
+                or self.target_temperature is None
+            ):
+                return features & ~(
+                    ClimateEntityFeature.TARGET_TEMPERATURE
+                    | ClimateEntityFeature.PRESET_MODE
+                )
+            return features
         power_features = ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
         if self.coordinator.data.get("cronus_controller_type") != "air":
             return power_features
@@ -194,6 +208,10 @@ class VevorHeaterClimate(
                 self._restored_abba_target = float(target)
                 return target
             return self._restored_abba_target
+        if (
+            self.coordinator.is_dz06_neo or self.coordinator.is_warm_drive_controller
+        ) and isinstance(target, (int, float)) and target <= 0:
+            return None
         return target
 
     @property

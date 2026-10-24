@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5.2` adds a Status sensor (`Off · Target: 19 °C · Current: 11 °C`) so Off, setpoint, and cabin temp are labeled. Oil type stays diesel/kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5.3` labels the device climate row as `Off · Target:` (or `Heat · Target:`) so HA’s header reads `Off · Target: 14 °C` / `Currently: 12 °C`. Off frames that send target `0` keep the last real setpoint. Oil type stays diesel/kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -766,8 +766,13 @@ Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat r
 
 ## Changelog
 
-### Version 2.1.5.2 (Latest)
-- **Status** sensor on the device: `Off · Target: 19 °C · Current: 11 °C` (Heating when on). Climate `status` attribute matches. HA’s climate header is still `Off 19 °C`.
+### Version 2.1.5.3 (Latest)
+- Device climate row: `Off · Target: 14 °C` / `Currently: 12 °C` (HA still concatenates state + setpoint; the state word is now labeled Target)
+- Warm Drive off frames with target `0` keep the last real setpoint (including Fahrenheit)
+- Do not create the generic Heater Level fan on Warm Drive
+
+### Version 2.1.5.2
+- **Status** sensor on the device: `Off · Target: 19 °C · Current: 11 °C` (Heating when on). Climate `status` attribute matches.
 
 ### Version 2.1.5.1
 - Oil Type labels match the MUDIRO LCD: `1` diesel, `2` kerosene (wire codes unchanged from 2.1.5)

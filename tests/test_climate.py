@@ -25,6 +25,7 @@ def create_mock_coordinator() -> MagicMock:
     coordinator.protocol_mode = 0
     coordinator.send_command = AsyncMock(return_value=True)
     coordinator.is_dz06_neo = False
+    coordinator.is_warm_drive_controller = False
     coordinator.async_set_temperature = AsyncMock()
     coordinator.async_turn_on = AsyncMock()
     coordinator.async_turn_off = AsyncMock()
@@ -98,9 +99,32 @@ class TestVevorHeaterClimate:
 
         assert climate.hvac_mode == HVACMode.OFF
         assert climate.icon == "mdi:radiator-off"
+        assert climate._attr_translation_key == "climate"
         assert climate.extra_state_attributes["status"] == (
             "Off · Target: 19 °C · Current: 11 °C"
         )
+
+    def test_warm_drive_zero_setpoint_is_not_shown(self):
+        """HA climate concatenates Off + target; a wire 0 must not become 0 °C."""
+        coordinator = create_mock_coordinator()
+        coordinator.is_warm_drive_controller = True
+        coordinator.data["running_state"] = 0
+        coordinator.data["set_temp"] = 0
+        climate = VevorHeaterClimate(coordinator, create_mock_config_entry())
+
+        assert climate.target_temperature is None
+        assert climate.supported_features != climate._attr_supported_features
+
+    def test_warm_drive_level_mode_hides_climate_setpoint(self):
+        from custom_components.diesel_heater.const import RUNNING_MODE_LEVEL
+
+        coordinator = create_mock_coordinator()
+        coordinator.is_warm_drive_controller = True
+        coordinator.data["running_mode"] = RUNNING_MODE_LEVEL
+        coordinator.data["set_temp"] = 22
+        climate = VevorHeaterClimate(coordinator, create_mock_config_entry())
+
+        assert climate.supported_features != climate._attr_supported_features
 
     def test_target_temperature(self):
         """Test target_temperature returns set_temp."""

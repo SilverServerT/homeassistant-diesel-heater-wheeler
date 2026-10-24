@@ -99,6 +99,9 @@
   },
   "entity": {
     "sensor": {
+      "status": {
+        "name": "Status"
+      },
       "case_temp": {
         "name": "Case Temperature"
       },
@@ -212,7 +215,11 @@
     },
     "climate": {
       "climate": {
-        "name": "Heater"
+        "name": "Heater",
+        "state": {
+          "off": "Off · Target:",
+          "heat": "Heat · Target:"
+        }
       }
     },
     "fan": {

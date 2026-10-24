@@ -13,6 +13,7 @@ from custom_components.diesel_heater.const import (
     RUNNING_MODE_LEVEL,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
+    RUNNING_STATE_OFF,
     RUNNING_STATE_ON,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_RUNNING,
@@ -351,6 +352,41 @@ def test_5a25_level_mode_stores_gear_not_celsius() -> None:
     assert coordinator.data["set_temp"] == 22
     assert coordinator.data["running_mode"] == RUNNING_MODE_LEVEL
     assert coordinator.data["set_level"] == 16
+
+
+def test_5a25_off_zero_target_keeps_last_set_temp() -> None:
+    """Shutdown frames often send target 0; keep the last real setpoint."""
+    coordinator = coordinator_for_layout(True)
+    coordinator.data["set_temp"] = 19
+    frame = bytearray(39)
+    frame[:2] = b"Z%"
+    frame[3] = 0
+    frame[15] = 0
+    frame[34] = 2
+    frame[35] = 12
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["set_temp"] == 19
+    assert coordinator.data["cab_temperature"] == 12.0
+    assert coordinator.data["running_state"] == RUNNING_STATE_OFF
+
+
+def test_5a25_off_zero_target_keeps_last_set_temp_in_fahrenheit() -> None:
+    """Raw 0 is 32°F after conversion; still must not replace the setpoint."""
+    coordinator = coordinator_for_layout(True)
+    coordinator._heater_uses_fahrenheit = True
+    coordinator.data["set_temp"] = 68
+    frame = bytearray(39)
+    frame[:2] = b"Z%"
+    frame[3] = 0
+    frame[15] = 0
+    frame[34] = 2
+    frame[35] = 12
+
+    coordinator._notification_callback(FFF2, frame)
+
+    assert coordinator.data["set_temp"] == 68
 
 
 def test_5a25_uses_warm_drive_fahrenheit_display_conversion() -> None:

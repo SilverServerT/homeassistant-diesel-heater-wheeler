@@ -88,7 +88,10 @@ print(f'    pin={pin} <= PyPI={served} - OK')
 "
 
 TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+cleanup() {
+    rm -rf "$TMPDIR" "${WHEEL_TMP:-}"
+}
+trap cleanup EXIT
 python3 -m venv "$TMPDIR/venv"
 # shellcheck disable=SC1091
 source "$TMPDIR/venv/bin/activate"
@@ -182,7 +185,6 @@ if [ -z "$LIB_VER" ]; then
 fi
 
 WHEEL_TMP=$(mktemp -d)
-# Note: NOT trapping — the outer trap at line ~85 already cleans /tmp/*
 
 # Build in a copy so we don't pollute the repo's dist/ dir
 cp -r "$LIB_DIR" "$WHEEL_TMP/build-src"
