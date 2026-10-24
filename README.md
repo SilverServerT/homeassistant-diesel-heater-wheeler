@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.32` is beta.25 plus pamphlet-app settings and Warm Drive gear 1–10. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.33` is beta.25 plus pamphlet-app settings and Warm Drive gear 1–10 mapped onto the controller’s 8–35 window. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -698,12 +698,13 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.30` | `18fd66c` | PIN restored to the beta.25 field, on top of beta.29 |
 | `v2.1.5-beta.31` | `e9e0568` | Verified MUDIRO 5 kW Warm Drive build record |
 | `v2.1.5-beta.32` | `148b915` | Warm Drive Level 1–10 via native `0x51` run type 1 |
+| `v2.1.5-beta.33` | | Level 1–10 mapped onto the 8–35 `0x51` window |
 
 ### What stayed the same
 
 - Split FFF0: FFF1 write, FFF2 notify. The name is not used to find the device.
 - Session open is still `29 0D 5C` with controller code `100000000` (`05 F5 E1 00`), then `5C16`, `29 0D FF`, `29 0D 5D` for Warm Drive, then the opcode-0 status poll.
-- Level and Temperature still use native run type `0x51` (1 = Level with target 1–10, 2 = Temperature with the Celsius setpoint).
+- Level and Temperature still use native run type `0x51` (1 = Level, 2 = Temperature). HA Level 1–10 is mapped onto the 5C16 Celsius window (8–35 on MUDIRO). Temperature writes the Celsius setpoint.
 - An unnamed controller starts with Warm Drive false. `5C16` type byte `1` sets air and saves it. A saved air or water value is not corrected later.
 - The 16-byte manufacturer shortcut is unchanged.
 - A 20-second connect timeout still only stops the Home Assistant wait. It does not disconnect the ESPHome proxy slot.
@@ -737,7 +738,7 @@ Max Heat is created for protocol mode 0 and for a coordinator already known to b
 
 Pump Size is the existing pump select. On Warm Drive its name is Pump Size and the options are `0` = 16 mL, `1` = 22 mL, `2` = 28 mL, `3` = 32 mL, written to byte 16. Legacy controllers keep the name Pump Type, the microlitre labels, and command 17.
 
-Warm Drive Level is the number entity 1–10. It writes `0x51` run type 1 and stores gear from `5A25` byte 15. Byte 16 stays pump Hz and is not used as gear. Switching to Level without a stored gear sends 5. Temperature writes always use run type 2. Generic DZ06 still has no Level number.
+Warm Drive Level is the number entity 1–10. It writes `0x51` run type 1. This firmware only confirms targets in the 5C16 window, so gear 1 sends 8, gear 5 sends 20, and gear 10 sends 35. `5A25` byte 15 is mapped back to 1–10. Byte 16 stays pump Hz. Switching to Level without a stored gear sends gear 5 (wire 20). Temperature writes always use run type 2. Generic DZ06 still has no Level number.
 
 ### Checked on the MUDIRO
 

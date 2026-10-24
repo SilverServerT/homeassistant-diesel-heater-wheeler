@@ -437,7 +437,7 @@ async def test_status_poll_uses_app_startup_settings() -> None:
     packet = coordinator._write_gatt.await_args.args[0]
     assert packet[:4] == bytearray((0xA5, 0x09, 0x01, 0x00))
     assert packet[4] == 1
-    assert packet[5] == 5
+    assert packet[5] == coordinator._warm_drive_gear_to_wire(5)
 
 
 @pytest.mark.asyncio
@@ -514,8 +514,9 @@ async def test_warm_drive_set_level_sends_native_gear_control() -> None:
             "altitude": 1500,
         }
     )
+    wire = coordinator._warm_drive_gear_to_wire(3)
     response = bytearray(39)
-    response[:2], response[15], response[34] = b"Z%", 3, 1
+    response[:2], response[15], response[34] = b"Z%", wire, 1
     coordinator._write_gatt = AsyncMock(
         side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
     )
@@ -524,9 +525,22 @@ async def test_warm_drive_set_level_sends_native_gear_control() -> None:
     packet = coordinator._write_gatt.await_args.args[0]
     assert packet[3] == 0x51
     assert packet[4] == 1
-    assert packet[5] == 3
+    assert packet[5] == wire
     assert coordinator.data["set_gear"] == 3
     assert coordinator.data["running_mode"] == RUNNING_MODE_LEVEL
+
+
+def test_warm_drive_gear_maps_onto_the_celsius_window() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update({"neo_min_target": 8, "neo_max_target": 35})
+
+    assert coordinator._warm_drive_gear_to_wire(1) == 8
+    assert coordinator._warm_drive_gear_to_wire(5) == 20
+    assert coordinator._warm_drive_gear_to_wire(10) == 35
+    assert coordinator._warm_drive_wire_to_gear(8) == 1
+    assert coordinator._warm_drive_wire_to_gear(20) == 5
+    assert coordinator._warm_drive_wire_to_gear(35) == 10
+    assert coordinator._warm_drive_wire_to_gear(7) == 7
 
 
 @pytest.mark.asyncio
@@ -592,7 +606,7 @@ async def test_power_requires_confirmed_5a25() -> None:
     coordinator._write_gatt = AsyncMock(side_effect=lambda packet: coordinator._notification_callback(FFF2, response))
     assert await coordinator._send_dz06_neo_power(True) is True
     assert coordinator._write_gatt.await_args.args[0] == VevorHeaterCoordinator._neo_packet(
-        0x5A, 1, 5, 1
+        0x5A, 1, coordinator._warm_drive_gear_to_wire(5), 1
     )
 
 
@@ -753,15 +767,16 @@ async def test_max_power_control_uses_the_app_packet_and_configured_limit() -> N
             "altitude": 1500,
         }
     )
+    wire = coordinator._warm_drive_gear_to_wire(10)
     response = bytearray(39)
-    response[:2], response[3], response[15], response[34] = b"Z%", 1, 10, 1
+    response[:2], response[3], response[15], response[34] = b"Z%", 1, wire, 1
     coordinator._write_gatt = AsyncMock(
         side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
     )
 
     assert await coordinator._async_set_dz06_neo_control(1, 10, 1500) is True
     assert coordinator._write_gatt.await_args.args[0] == VevorHeaterCoordinator._neo_packet(
-        0x51, 1, 10, 1500
+        0x51, 1, wire, 1500
     )
 
 
@@ -786,7 +801,7 @@ async def test_burnoff_shutdown_uses_neo_app_power_off_packet() -> None:
 
     await coordinator._power_off()
     assert coordinator._write_gatt.await_args.args[0] == VevorHeaterCoordinator._neo_packet(
-        0x5C, 1, 5, 1
+        0x5C, 1, coordinator._warm_drive_gear_to_wire(5), 1
     )
 
 
@@ -1085,8 +1100,9 @@ async def test_warm_drive_level_mode_hides_switch_and_keeps_stored_flag() -> Non
     coordinator._notification_callback(
         FFF2, neo_config_response(auto_start=1, minimum=8, maximum=35)
     )
+    wire = coordinator._warm_drive_gear_to_wire(5)
     response = bytearray(39)
-    response[:2], response[15], response[34] = b"Z%", 5, 1
+    response[:2], response[15], response[34] = b"Z%", wire, 1
     coordinator._write_gatt = AsyncMock(
         side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
     )
@@ -1094,7 +1110,7 @@ async def test_warm_drive_level_mode_hides_switch_and_keeps_stored_flag() -> Non
     assert await coordinator.async_set_mode(RUNNING_MODE_LEVEL) is True
     packet = coordinator._write_gatt.await_args.args[0]
     assert packet[4] == 1
-    assert packet[5] == 5
+    assert packet[5] == wire
     assert coordinator.data["auto_start_stop"] is True
     assert coordinator._warm_drive_board_config[14] == 1
     switch = VevorAutoStartStopSwitch(coordinator)

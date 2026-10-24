@@ -2131,11 +2131,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     "altitude": int.from_bytes(data[32:34], "big"),
                     "neo_run_type": run_type,
                 }
-                if (
-                    run_type == 1
-                    and MIN_LEVEL <= data[15] <= MAX_LEVEL
-                ):
-                    status["set_gear"] = data[15]
+                if run_type == 1:
+                    status["set_gear"] = self._warm_drive_wire_to_gear(data[15])
                 else:
                     status["set_temp"] = self._dz06_neo_display_temperature(data[15])
                 self.data.update(status)
@@ -2831,6 +2828,51 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return gear
         return 5
 
+    def _neo_target_limits(self) -> tuple[int, int]:
+        """Return the 5C16 Celsius range, defaulting to 8-36."""
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            return 8, 36
+        if minimum > maximum:
+            return 8, 36
+        return minimum, maximum
+
+    def _warm_drive_gear_to_wire(self, gear: int) -> int:
+        """Map HA gear 1-10 onto the controller's 8-35 (or 5C16) range.
+
+        Live MUDIRO 5A25 confirms 0x51 run_type 1 only for targets in that
+        Celsius window. Raw 1-7 never echo; 8-10 do. The HA Level entity
+        stays 1-10.
+        """
+        try:
+            gear = int(gear)
+        except (TypeError, ValueError):
+            gear = 5
+        gear = max(MIN_LEVEL, min(MAX_LEVEL, gear))
+        minimum, maximum = self._neo_target_limits()
+        if maximum <= minimum:
+            return minimum
+        span = MAX_LEVEL - MIN_LEVEL
+        return int(round(minimum + (gear - MIN_LEVEL) * (maximum - minimum) / span))
+
+    def _warm_drive_wire_to_gear(self, target: int) -> int:
+        """Map a 0x51/5A25 level-mode target back to HA gear 1-10."""
+        try:
+            target = int(target)
+        except (TypeError, ValueError):
+            return 5
+        minimum, maximum = self._neo_target_limits()
+        if MIN_LEVEL <= target < minimum:
+            return target
+        if maximum <= minimum:
+            return MIN_LEVEL
+        ratio = (target - minimum) / (maximum - minimum)
+        return max(MIN_LEVEL, min(MAX_LEVEL, int(round(ratio * (MAX_LEVEL - MIN_LEVEL) + MIN_LEVEL))))
+
     def _neo_temperature_command_target(self) -> int | None:
         """Return a Celsius 0x51 target, falling back if no setpoint is stored."""
         minimum = self.data.get("neo_min_target")
@@ -2886,7 +2928,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if run_type not in (1, 2) or not 0 <= altitude <= 0xFFFF:
             return None
         if self.is_warm_drive_controller and run_type == 1:
-            return run_type, self._warm_drive_gear_target(), altitude
+            return run_type, self._warm_drive_gear_to_wire(self._warm_drive_gear_target()), altitude
         try:
             target = int(round(float(target)))
             if self._heater_uses_fahrenheit:
@@ -2963,7 +3005,9 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         except (TypeError, ValueError):
             return False
         if self.is_warm_drive_controller and run_type == 1:
-            target_ok = MIN_LEVEL <= target <= MAX_LEVEL
+            if MIN_LEVEL <= target <= MAX_LEVEL:
+                target = self._warm_drive_gear_to_wire(target)
+            target_ok = minimum <= target <= maximum
         else:
             target_ok = minimum <= target <= maximum
         if run_type not in (1, 2) or not target_ok or not 0 <= altitude <= 0xFFFF:
@@ -3638,9 +3682,11 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 if settings is not None
                 else self._neo_status_poll_settings()[2]
             )
+            wire = self._warm_drive_gear_to_wire(level)
             self._logger.info(
-                "Warm Drive gear write run_type=1 target=%s altitude=%s",
+                "Warm Drive gear write gear=%s wire=%s altitude=%s",
                 level,
+                wire,
                 altitude,
             )
             success = await self._async_set_dz06_neo_control(1, level, altitude)
