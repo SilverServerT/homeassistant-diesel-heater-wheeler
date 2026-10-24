@@ -39,6 +39,7 @@ def create_mock_coordinator(protocol_mode: int = 1) -> MagicMock:
     coordinator.async_add_listener = MagicMock(return_value=MagicMock())
     coordinator.burnoff_active = False
     coordinator.is_warm_drive_controller = False
+    coordinator.warm_drive_aux_supported = False
     coordinator.data = {
         "connected": True,
         "running_mode": 1,  # Level mode
@@ -208,10 +209,22 @@ class TestVevorHeaterModeSelect:
 
             assert "Ventilation" not in select.options
 
-    def test_warm_drive_options_include_ventilation_and_cleaning_when_standby(self):
-        """Warm Drive offers Ventilation and Cleaning while off."""
+    def test_warm_drive_hides_aux_modes_until_controller_reports_them(self):
+        """Warm Drive without 170/171 does not list Ventilation or Cleaning."""
         coordinator = create_mock_coordinator(protocol_mode=0)
         coordinator.is_warm_drive_controller = True
+        coordinator.warm_drive_aux_supported = False
+        coordinator.data["running_step"] = 0
+        select = VevorHeaterModeSelect(coordinator)
+
+        assert "Ventilation" not in select.options
+        assert "Cleaning" not in select.options
+
+    def test_warm_drive_options_include_ventilation_and_cleaning_when_standby(self):
+        """Warm Drive offers Ventilation and Cleaning after the board reports them."""
+        coordinator = create_mock_coordinator(protocol_mode=0)
+        coordinator.is_warm_drive_controller = True
+        coordinator.warm_drive_aux_supported = True
         coordinator.data["running_step"] = 0
         select = VevorHeaterModeSelect(coordinator)
 
@@ -222,6 +235,7 @@ class TestVevorHeaterModeSelect:
         """Warm Drive keeps both aux options after Ventilation is selected."""
         coordinator = create_mock_coordinator(protocol_mode=0)
         coordinator.is_warm_drive_controller = True
+        coordinator.warm_drive_aux_supported = True
         coordinator.data["running_step"] = 6
         select = VevorHeaterModeSelect(coordinator)
 
@@ -234,6 +248,7 @@ class TestVevorHeaterModeSelect:
 
         coordinator = create_mock_coordinator(protocol_mode=0)
         coordinator.is_warm_drive_controller = True
+        coordinator.warm_drive_aux_supported = True
         coordinator.data["running_step"] = RUNNING_STEP_CLEANING
         select = VevorHeaterModeSelect(coordinator)
 
@@ -266,6 +281,7 @@ class TestVevorHeaterModeSelect:
         """Test selecting cleaning mode for Warm Drive."""
         coordinator = create_mock_coordinator(protocol_mode=0)
         coordinator.is_warm_drive_controller = True
+        coordinator.warm_drive_aux_supported = True
         coordinator.data["running_step"] = 0
         select = VevorHeaterModeSelect(coordinator)
 

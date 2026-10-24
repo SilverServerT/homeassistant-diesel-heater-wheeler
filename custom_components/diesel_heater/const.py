@@ -147,6 +147,7 @@ MAX_PIN: Final = 9999
 # Sunster Neo uses a separate numeric connection password.
 CONF_NEO_PASSWORD: Final = "neo_password"
 CONF_NEO_CONTROLLER_TYPE: Final = "neo_controller_type"
+CONF_WARM_DRIVE_AUX_MODES: Final = "warm_drive_aux_modes"
 DEFAULT_NEO_PASSWORD: Final = 100000000
 MIN_NEO_PASSWORD: Final = 0
 MAX_NEO_PASSWORD: Final = 2147483647

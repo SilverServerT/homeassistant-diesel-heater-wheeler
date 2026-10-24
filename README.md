@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.38` is beta.37 plus skipping opcode-0 status polls after Warm Drive ventilation and cleaning, so HA does not snap the LCD back to Level/Temp. Both options stay in the mode list. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.39` is beta.38 plus hiding Warm Drive ventilation and cleaning until this controller reports `5A25` state 170 or 171. The MUDIRO 5 kW LCD does not have those modes, so Running Mode stays Level and Temperature. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -704,6 +704,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.36` | `8d7ba1f` | Poll after vent/clean; off first from standby 160 |
 | `v2.1.5-beta.37` | `1e18126` | Keep vent/clean in HA when `5A25` raw state stays 0 |
 | `v2.1.5-beta.38` | `c641e06` | Skip opcode-0 polls while vent/clean is held; keep both options visible |
+| `v2.1.5-beta.39` | | Hide vent/clean until this heater reports `5A25` 170/171 |
 
 ### What stayed the same
 

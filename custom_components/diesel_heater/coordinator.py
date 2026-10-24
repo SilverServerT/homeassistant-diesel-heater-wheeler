@@ -49,6 +49,7 @@ from .const import (
     CRONUS_FUEL_PROFILES,
     CONF_NEO_PASSWORD,
     CONF_NEO_CONTROLLER_TYPE,
+    CONF_WARM_DRIVE_AUX_MODES,
     CONF_PIN,
     CONF_TEMPERATURE_OFFSET,
     CRONUS_NOTIFY_UUID,
@@ -488,6 +489,36 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self.config_entry,
             data={**self.config_entry.data, CONF_NEO_CONTROLLER_TYPE: controller_type},
         )
+
+    @property
+    def warm_drive_aux_supported(self) -> bool:
+        """Return whether this Warm Drive board has reported ventilation or cleaning.
+
+        The pamphlet app exposes 0xAB/0xA1 for every Air Heater. Some LCDs,
+        including the MUDIRO 5 kW, do not. Only offer those modes after 5A25
+        reports 170/171, or after that fact was saved on the config entry.
+        """
+        if self.config_entry.data.get(CONF_WARM_DRIVE_AUX_MODES) is True:
+            return True
+        return self.data.get("neo_raw_state") in (
+            WARM_DRIVE_RAW_CLEANING,
+            WARM_DRIVE_RAW_VENTILATION,
+        )
+
+    def _remember_warm_drive_aux_modes(self) -> None:
+        """Persist that this controller actually reports ventilation/cleaning."""
+        if self.config_entry.data.get(CONF_WARM_DRIVE_AUX_MODES) is True:
+            return
+        hass = getattr(self, "hass", None)
+        if hass is None or not hasattr(hass, "config_entries"):
+            return
+        try:
+            hass.config_entries.async_update_entry(
+                self.config_entry,
+                data={**self.config_entry.data, CONF_WARM_DRIVE_AUX_MODES: True},
+            )
+        except Exception as err:
+            self._logger.debug("Could not persist Warm Drive aux-mode support: %s", err)
 
     @property
     def is_dz06_neo(self) -> bool:
@@ -2193,11 +2224,13 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = RUNNING_STEP_CLEANING
                     self.data["running_mode"] = RUNNING_MODE_CLEANING
+                    self._remember_warm_drive_aux_modes()
                 elif raw_state == WARM_DRIVE_RAW_VENTILATION:
                     self._warm_drive_held_aux = RUNNING_MODE_VENTILATION
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = RUNNING_STEP_VENTILATION
                     self.data["running_mode"] = RUNNING_MODE_VENTILATION
+                    self._remember_warm_drive_aux_modes()
                 if raw_state not in (
                     WARM_DRIVE_RAW_CLEANING,
                     WARM_DRIVE_RAW_VENTILATION,
@@ -4063,6 +4096,12 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if mode in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING):
             if self.is_warm_drive_controller:
+                if not self.warm_drive_aux_supported:
+                    self._logger.warning(
+                        "Warm Drive ventilation/cleaning is hidden until 5A25 "
+                        "reports state 170 or 171 on this controller"
+                    )
+                    return False
                 return await self._async_set_warm_drive_aux_mode(mode)
             if mode == RUNNING_MODE_VENTILATION and self._protocol_mode == 5:
                 running_step = self.data.get("running_step", 0)

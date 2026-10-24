@@ -155,8 +155,9 @@ class VevorHeaterModeSelect(SelectEntity):
     def options(self) -> list[str]:
         """Return available running mode options.
 
-        For ABBA and Warm Drive, include Ventilation when the heater is off
-        or already ventilating. Warm Drive also offers Cleaning while off.
+        For ABBA, include Ventilation when the heater is off or already
+        ventilating. Warm Drive only lists Ventilation and Cleaning after
+        this controller has reported those states (5A25 170/171).
         """
         base_options = [
             RUNNING_MODE_NAMES[RUNNING_MODE_LEVEL],
@@ -164,15 +165,15 @@ class VevorHeaterModeSelect(SelectEntity):
         ]
 
         running_step = self.coordinator.data.get("running_step")
-        warm_drive = self.coordinator.is_warm_drive_controller is True
         if self.coordinator.protocol_mode == 5 and running_step in (
             RUNNING_STEP_STANDBY,
             RUNNING_STEP_VENTILATION,
         ):
             base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
-        if warm_drive:
-            # Keep both visible; hiding Cleaning while "ventilating" made it
-            # look like the second option vanished after a tap.
+        if (
+            self.coordinator.is_warm_drive_controller is True
+            and self.coordinator.warm_drive_aux_supported is True
+        ):
             base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
             base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING])
 
@@ -193,9 +194,15 @@ class VevorHeaterModeSelect(SelectEntity):
     def current_option(self) -> str | None:
         """Return the current running mode."""
         running_step = self.coordinator.data.get("running_step")
-        if running_step == RUNNING_STEP_VENTILATION:
+        if (
+            running_step == RUNNING_STEP_VENTILATION
+            and RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION] in self.options
+        ):
             return RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION]
-        if running_step == RUNNING_STEP_CLEANING:
+        if (
+            running_step == RUNNING_STEP_CLEANING
+            and RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING] in self.options
+        ):
             return RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING]
 
         mode = self.coordinator.data.get("running_mode")
@@ -212,6 +219,9 @@ class VevorHeaterModeSelect(SelectEntity):
                 mode_value = mode
                 break
 
+        if option not in self.options:
+            _LOGGER.warning("Running mode %s is not available on this heater", option)
+            return
         if mode_value is not None:
             _LOGGER.info("Changing running mode to: %s (value: %d)", option, mode_value)
             await self.coordinator.async_set_mode(mode_value)
