@@ -275,10 +275,12 @@ WARM_DRIVE_PUMP_SIZE_OPTIONS: Final = {
     3: "32 mL",
 }
 
-# Pamphlet app oilTypeMap: diesel_oil → 1, gasoline → 2. Live MUDIRO 5C16 is 1.
+# Pamphlet app oilTypeMap: diesel_oil → 1, second fuel → 2. Live MUDIRO 5C16
+# is 1 (diesel on the LCD). The app string for 2 is "gasoline"; this heater's
+# LCD and fuel are diesel/kerosene.
 WARM_DRIVE_OIL_TYPE_OPTIONS: Final = {
     1: "Diesel",
-    2: "Gasoline",
+    2: "Kerosene",
 }
 
 # Pump type options (byte 29) - verified by @Xev testing

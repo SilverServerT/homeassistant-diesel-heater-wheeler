@@ -4298,7 +4298,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return
         code = int(oil_type)
         if code not in WARM_DRIVE_OIL_TYPE_OPTIONS:
-            self._logger.warning("Warm Drive oil type %s is not diesel (1) or gasoline (2)", code)
+            self._logger.warning("Warm Drive oil type %s is not diesel (1) or kerosene (2)", code)
             return
         self._logger.info("Setting Warm Drive oil type to %s (0x26 byte 3)", code)
         await self._async_write_warm_drive_config(

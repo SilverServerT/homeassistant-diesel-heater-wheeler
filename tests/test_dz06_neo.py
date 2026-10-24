@@ -1204,7 +1204,7 @@ def test_warm_drive_oil_type_1_is_diesel() -> None:
     assert coordinator.data["oil_type"] == 1
     assert select.current_option == "Diesel"
     assert WARM_DRIVE_OIL_TYPE_OPTIONS[1] == "Diesel"
-    assert WARM_DRIVE_OIL_TYPE_OPTIONS[2] == "Gasoline"
+    assert WARM_DRIVE_OIL_TYPE_OPTIONS[2] == "Kerosene"
 
 
 @pytest.mark.asyncio
