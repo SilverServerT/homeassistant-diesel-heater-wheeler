@@ -700,6 +700,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.32` | `148b915` | Warm Drive Level 1–10 via native `0x51` run type 1 |
 | `v2.1.5-beta.33` | `28a66ec` | Level 1–10 mapped onto the 8–35 `0x51` window |
 | `v2.1.5-beta.34` | `3b2d8b1` | Oil type, heat limits, oil Hz, fan RPM, and glow on `0x26` |
+| `v2.1.5-beta.35` | `9bec65e` | Ventilation `0xAB` and cleaning `0xA1` while off |
 
 ### What stayed the same
 
