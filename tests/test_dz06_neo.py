@@ -463,8 +463,9 @@ async def test_warm_drive_aux_mode_writes_off_only_opcode(
     )
 
     assert await coordinator.async_set_mode(mode) is True
-    packet = coordinator._write_gatt.await_args.args[0]
-    assert packet[:4] == bytearray((0xA5, 0x09, 0x01, opcode))
+    packets = [call.args[0] for call in coordinator._write_gatt.await_args_list]
+    assert any(packet[:4] == bytearray((0xA5, 0x09, 0x01, opcode)) for packet in packets)
+    assert packets[-1][:4] == bytearray((0xA5, 0x09, 0x01, 0x00))
 
 
 @pytest.mark.asyncio
@@ -497,6 +498,35 @@ async def test_warm_drive_aux_mode_skips_write_when_already_active() -> None:
     assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
     coordinator._write_gatt.assert_not_awaited()
     coordinator.async_request_refresh.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_aux_mode_from_standby_160_sends_off_first() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "neo_raw_state": 160,
+            "running_step": RUNNING_STEP_STANDBY,
+            "neo_run_type": 2,
+            "set_temp": 15,
+            "altitude": 91,
+            "neo_min_target": 8,
+            "neo_max_target": 35,
+        }
+    )
+
+    def on_write(packet: bytearray) -> None:
+        frame = bytearray(39)
+        frame[:2] = b"Z%"
+        frame[3] = 0 if packet[3] == 0x5C else 171
+        coordinator._notification_callback(FFF2, frame)
+
+    coordinator._write_gatt = AsyncMock(side_effect=on_write)
+
+    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
+    opcodes = [call.args[0][3] for call in coordinator._write_gatt.await_args_list]
+    assert opcodes[0] == 0x5C
+    assert 0xAB in opcodes
 
 
 @pytest.mark.asyncio

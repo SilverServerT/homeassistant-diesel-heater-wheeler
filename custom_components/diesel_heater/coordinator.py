@@ -2792,20 +2792,45 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         return packet
 
     def _warm_drive_can_start_aux(self) -> bool:
-        """Return whether ventilation/cleaning may start (heater off or standby)."""
-        raw_state = self.data.get("neo_raw_state")
-        if raw_state in (0, WARM_DRIVE_RAW_STANDBY):
-            return True
-        return self.data.get("running_step") == RUNNING_STEP_STANDBY
+        """Return whether ventilation/cleaning may start.
+
+        The pamphlet app only sends 0xAB/0xA1 when runStateRead is 0.
+        HA Off often leaves the controller in 160 (standby); that still
+        needs a 0x5C first.
+        """
+        return self.data.get("neo_raw_state") in (0, WARM_DRIVE_RAW_STANDBY)
 
     async def _async_wait_warm_drive_raw_state(self, expected_raw: int) -> bool:
-        """Wait up to 3s for 5A25 to report the requested raw state."""
-        deadline = time.monotonic() + 3
+        """Wait up to 2s for 5A25 to report the requested raw state."""
+        deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            await asyncio.sleep(0.1)
             if self.data.get("neo_raw_state") == expected_raw:
                 return True
-        return False
+            await asyncio.sleep(0.1)
+        return self.data.get("neo_raw_state") == expected_raw
+
+    async def _async_write_warm_drive_opcode(self, opcode: int) -> bool:
+        """Write one A5/09 opcode using the last poll settings."""
+        run_type, target, altitude = self._neo_status_poll_settings()
+        packet = self._neo_packet(opcode, run_type, target, altitude)
+        log = self._logger.debug if opcode == 0x00 else self._logger.info
+        log(
+            "Warm Drive opcode=0x%02X run_type=%s target=%s altitude=%s",
+            opcode,
+            run_type,
+            target,
+            altitude,
+        )
+        try:
+            await self._write_gatt(packet)
+        except Exception as err:
+            self._logger.warning("Warm Drive opcode 0x%02X write failed: %s", opcode, err)
+            return False
+        return True
+
+    async def _async_poll_warm_drive_status(self) -> None:
+        """Ask for a 5A25. Aux opcodes do not emit status by themselves."""
+        await self._async_write_warm_drive_opcode(0x00)
 
     async def _async_set_warm_drive_aux_mode(self, mode: int) -> bool:
         """Send pamphlet ventilation (0xAB) or cleaning (0xA1) while the heater is off."""
@@ -2839,26 +2864,29 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 self.data.get("running_step"),
             )
             return False
-        run_type, target, altitude = self._neo_status_poll_settings()
-        self._notification_data = None
-        packet = self._neo_packet(opcode, run_type, target, altitude)
-        self._logger.info(
-            "Warm Drive %s opcode=0x%02X run_type=%s target=%s altitude=%s",
-            action,
-            opcode,
-            run_type,
-            target,
-            altitude,
-        )
-        try:
-            await self._write_gatt(packet)
-        except Exception as err:
-            self._logger.warning("Warm Drive %s write failed: %s", action, err)
+        if self.data.get("neo_raw_state") == WARM_DRIVE_RAW_STANDBY:
+            self._logger.info("Warm Drive %s: standby 160, sending off first", action)
+            if not await self._async_write_warm_drive_opcode(0x5C):
+                return False
+            await self._async_poll_warm_drive_status()
+            if not await self._async_wait_warm_drive_raw_state(0):
+                self._logger.info(
+                    "Warm Drive %s: still raw_state=%s after off, sending %s anyway",
+                    action,
+                    self.data.get("neo_raw_state"),
+                    action,
+                )
+        if not await self._async_write_warm_drive_opcode(opcode):
             return False
+        await self._async_poll_warm_drive_status()
         if await self._async_wait_warm_drive_raw_state(expected_raw):
             await self.async_request_refresh()
             return True
-        self._logger.warning("Warm Drive %s write sent, but 5A25 did not confirm", action)
+        self._logger.warning(
+            "Warm Drive %s write sent, but 5A25 did not confirm (raw_state=%s)",
+            action,
+            self.data.get("neo_raw_state"),
+        )
         return False
 
     def _warm_drive_config_packet(self, overrides: dict[int, int]) -> bytearray | None:
