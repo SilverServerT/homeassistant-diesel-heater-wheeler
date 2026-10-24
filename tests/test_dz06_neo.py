@@ -530,6 +530,35 @@ async def test_warm_drive_aux_mode_from_standby_160_sends_off_first() -> None:
 
 
 @pytest.mark.asyncio
+async def test_warm_drive_aux_keeps_mode_when_5a25_stays_raw_zero() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "neo_raw_state": 0,
+            "running_step": RUNNING_STEP_STANDBY,
+            "neo_run_type": 1,
+            "set_temp": 15,
+            "altitude": 1,
+            "neo_min_target": 8,
+            "neo_max_target": 35,
+        }
+    )
+    idle = bytearray(39)
+    idle[:2] = b"Z%"
+    coordinator._write_gatt = AsyncMock(
+        side_effect=lambda packet: coordinator._notification_callback(FFF2, idle)
+    )
+
+    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
+    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
+    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
+
+    coordinator._notification_callback(FFF2, idle)
+    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
+    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
+
+
+@pytest.mark.asyncio
 async def test_status_poll_uses_app_startup_settings() -> None:
     coordinator = coordinator_for_layout(True)
     coordinator._client = SimpleNamespace(is_connected=True)

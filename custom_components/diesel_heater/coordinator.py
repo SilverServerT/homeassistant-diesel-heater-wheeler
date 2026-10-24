@@ -181,6 +181,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._neo_config_received = False
         self._neo_run_settings_received = False
         self._warm_drive_board_config: bytearray | None = None
+        self._warm_drive_held_aux: int | None = None
+        self._warm_drive_aux_busy = False
         # Get passkey from config, default to 1234 (factory default for most heaters)
         self._passkey = config_entry.data.get(CONF_PIN, DEFAULT_PIN)
         self._neo_password = config_entry.data.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD)
@@ -2162,28 +2164,46 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 self.data["neo_raw_state"] = raw_state
                 if raw_state == 1:
                     # The Neo app labels state 1 as self-check, before heating.
+                    self._warm_drive_held_aux = None
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = None
                 elif raw_state in (2, 3, 4, 5):
+                    self._warm_drive_held_aux = None
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = RUNNING_STEP_RUNNING
                 elif raw_state in (6, 7, 8):
+                    self._warm_drive_held_aux = None
                     self.data["running_state"] = RUNNING_STATE_OFF
                     self.data["running_step"] = RUNNING_STEP_COOLDOWN
+                elif (
+                    raw_state == 0
+                    and getattr(self, "_warm_drive_held_aux", None)
+                    in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
+                ):
+                    # This firmware can light the LCD for 0xAB/0xA1 while 5A25
+                    # byte 3 stays 0. Keep the mode HA just sent until off/heat.
+                    self._apply_warm_drive_held_aux(self._warm_drive_held_aux)
                 elif raw_state in (0, WARM_DRIVE_RAW_STANDBY):
+                    self._warm_drive_held_aux = None
                     self.data["running_state"] = RUNNING_STATE_OFF
                     self.data["running_step"] = RUNNING_STEP_STANDBY
                 elif raw_state == WARM_DRIVE_RAW_CLEANING:
+                    self._warm_drive_held_aux = RUNNING_MODE_CLEANING
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = RUNNING_STEP_CLEANING
                     self.data["running_mode"] = RUNNING_MODE_CLEANING
                 elif raw_state == WARM_DRIVE_RAW_VENTILATION:
+                    self._warm_drive_held_aux = RUNNING_MODE_VENTILATION
                     self.data["running_state"] = RUNNING_STATE_ON
                     self.data["running_step"] = RUNNING_STEP_VENTILATION
                     self.data["running_mode"] = RUNNING_MODE_VENTILATION
                 if raw_state not in (
                     WARM_DRIVE_RAW_CLEANING,
                     WARM_DRIVE_RAW_VENTILATION,
+                ) and not (
+                    raw_state == 0
+                    and getattr(self, "_warm_drive_held_aux", None)
+                    in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
                 ):
                     if run_type == 1:
                         self.data["running_mode"] = RUNNING_MODE_LEVEL
@@ -2826,11 +2846,25 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         except Exception as err:
             self._logger.warning("Warm Drive opcode 0x%02X write failed: %s", opcode, err)
             return False
+        if opcode != 0x00:
+            await asyncio.sleep(0.1)
         return True
 
     async def _async_poll_warm_drive_status(self) -> None:
         """Ask for a 5A25. Aux opcodes do not emit status by themselves."""
+        await asyncio.sleep(0.5)
         await self._async_write_warm_drive_opcode(0x00)
+
+    def _apply_warm_drive_held_aux(self, mode: int) -> None:
+        """Keep ventilation/cleaning in HA while 5A25 still reports raw 0."""
+        self._warm_drive_held_aux = mode
+        self.data["running_state"] = RUNNING_STATE_ON
+        if mode == RUNNING_MODE_VENTILATION:
+            self.data["running_step"] = RUNNING_STEP_VENTILATION
+            self.data["running_mode"] = RUNNING_MODE_VENTILATION
+        else:
+            self.data["running_step"] = RUNNING_STEP_CLEANING
+            self.data["running_mode"] = RUNNING_MODE_CLEANING
 
     async def _async_set_warm_drive_aux_mode(self, mode: int) -> bool:
         """Send pamphlet ventilation (0xAB) or cleaning (0xA1) while the heater is off."""
@@ -2864,6 +2898,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 self.data.get("running_step"),
             )
             return False
+        self._warm_drive_aux_busy = True
+        try:
+            return await self._async_send_warm_drive_aux(mode, opcode, expected_raw, action)
+        finally:
+            self._warm_drive_aux_busy = False
+
+    async def _async_send_warm_drive_aux(
+        self, mode: int, opcode: int, expected_raw: int, action: str
+    ) -> bool:
         if self.data.get("neo_raw_state") == WARM_DRIVE_RAW_STANDBY:
             self._logger.info("Warm Drive %s: standby 160, sending off first", action)
             if not await self._async_write_warm_drive_opcode(0x5C):
@@ -2878,16 +2921,21 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 )
         if not await self._async_write_warm_drive_opcode(opcode):
             return False
+        self._apply_warm_drive_held_aux(mode)
         await self._async_poll_warm_drive_status()
-        if await self._async_wait_warm_drive_raw_state(expected_raw):
+        confirmed = await self._async_wait_warm_drive_raw_state(expected_raw)
+        if not confirmed:
+            self._logger.info(
+                "Warm Drive %s sent; 5A25 still raw_state=%s (keeping %s in HA)",
+                action,
+                self.data.get("neo_raw_state"),
+                action,
+            )
+        if getattr(self, "hass", None) is not None:
+            self.async_set_updated_data(self.data)
+        else:
             await self.async_request_refresh()
-            return True
-        self._logger.warning(
-            "Warm Drive %s write sent, but 5A25 did not confirm (raw_state=%s)",
-            action,
-            self.data.get("neo_raw_state"),
-        )
-        return False
+        return True
 
     def _warm_drive_config_packet(self, overrides: dict[int, int]) -> bytearray | None:
         """Build a pamphlet-app 0x26 write, echoing 5C16 and replacing given bytes."""
@@ -3312,6 +3360,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if self.is_dz06_neo:
             if command == 1:
+                if getattr(self, "_warm_drive_aux_busy", False):
+                    return True
                 packet = self._neo_packet(0x00, *self._neo_status_poll_settings())
                 self._notification_data = None
                 try:
@@ -3687,6 +3737,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return False
         run_type, target, altitude = settings
         self._notification_data = None
+        self._warm_drive_held_aux = None
         try:
             await self._write_gatt(
                 self._neo_packet(0x5A if turn_on else 0x5C, run_type, target, altitude)
@@ -4056,6 +4107,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     "DZ06/Warm Drive only supports Level and Temperature modes"
                 )
                 return False
+            self._warm_drive_held_aux = None
             if self.is_warm_drive_controller:
                 altitude = self._neo_control_altitude()
                 if altitude is None:
