@@ -34,14 +34,14 @@ from diesel_heater_ble.const import (  # noqa: F401
     PROTOCOL_HEADER_CBFF,
     RUNNING_MODE_LEVEL,
     RUNNING_MODE_MANUAL,
-    RUNNING_MODE_NAMES as _RUNNING_MODE_NAMES,
+    RUNNING_MODE_NAMES,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
     RUNNING_STATE_OFF,
     RUNNING_STATE_ON,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_IGNITION,
-    RUNNING_STEP_NAMES as _RUNNING_STEP_NAMES,
+    RUNNING_STEP_NAMES,
     RUNNING_STEP_RUNNING,
     RUNNING_STEP_SELF_TEST,
     RUNNING_STEP_STANDBY,
@@ -51,23 +51,6 @@ from diesel_heater_ble.const import (  # noqa: F401
 # ---------------------------------------------------------------------------
 # Integration-specific constants (Home Assistant only)
 # ---------------------------------------------------------------------------
-
-# Warm Drive pamphlet app: fan-only 0xAB (state 171) and cleaning 0xA1 (state 170).
-RUNNING_MODE_CLEANING: Final = 4
-RUNNING_STEP_CLEANING: Final = 7
-WARM_DRIVE_CMD_VENTILATION: Final = 0xAB
-WARM_DRIVE_CMD_CLEANING: Final = 0xA1
-WARM_DRIVE_RAW_CLEANING: Final = 170
-WARM_DRIVE_RAW_VENTILATION: Final = 171
-WARM_DRIVE_RAW_STANDBY: Final = 160
-RUNNING_MODE_NAMES: Final = {
-    **_RUNNING_MODE_NAMES,
-    RUNNING_MODE_CLEANING: "Cleaning",
-}
-RUNNING_STEP_NAMES: Final = {
-    **_RUNNING_STEP_NAMES,
-    RUNNING_STEP_CLEANING: "Cleaning",
-}
 
 DOMAIN: Final = "diesel_heater"
 
@@ -147,7 +130,6 @@ MAX_PIN: Final = 9999
 # Sunster Neo uses a separate numeric connection password.
 CONF_NEO_PASSWORD: Final = "neo_password"
 CONF_NEO_CONTROLLER_TYPE: Final = "neo_controller_type"
-CONF_WARM_DRIVE_AUX_MODES: Final = "warm_drive_aux_modes"
 DEFAULT_NEO_PASSWORD: Final = 100000000
 MIN_NEO_PASSWORD: Final = 0
 MAX_NEO_PASSWORD: Final = 2147483647

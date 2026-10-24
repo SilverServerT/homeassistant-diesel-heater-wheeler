@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.39` is beta.38 plus hiding Warm Drive ventilation and cleaning until this controller reports `5A25` state 170 or 171. The MUDIRO 5 kW LCD does not have those modes, so Running Mode stays Level and Temperature. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.40` is `v2.1.5-beta.34` again. Warm Drive ventilation (`0xAB`) and cleaning (`0xA1`) from beta.35–39 are withdrawn; this MUDIRO LCD does not have those modes. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -700,11 +700,8 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.32` | `148b915` | Warm Drive Level 1–10 via native `0x51` run type 1 |
 | `v2.1.5-beta.33` | `28a66ec` | Level 1–10 mapped onto the 8–35 `0x51` window |
 | `v2.1.5-beta.34` | `3b2d8b1` | Oil type, heat limits, oil Hz, fan RPM, and glow on `0x26` |
-| `v2.1.5-beta.35` | `9bec65e` | Ventilation `0xAB` and cleaning `0xA1` while off |
-| `v2.1.5-beta.36` | `8d7ba1f` | Poll after vent/clean; off first from standby 160 |
-| `v2.1.5-beta.37` | `1e18126` | Keep vent/clean in HA when `5A25` raw state stays 0 |
-| `v2.1.5-beta.38` | `c641e06` | Skip opcode-0 polls while vent/clean is held; keep both options visible |
-| `v2.1.5-beta.39` | `b7def68` | Hide vent/clean until this heater reports `5A25` 170/171 |
+| `v2.1.5-beta.35`–`.39` | | Warm Drive vent/clean (withdrawn; not on this LCD) |
+| `v2.1.5-beta.40` | | Same as beta.34; Warm Drive vent/clean removed |
 
 ### What stayed the same
 
@@ -761,7 +758,7 @@ On `C8:17:F5:28:E7:9D` with beta.30, the 23:24 session completed `5C16` (8–35�
 
 Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same logged fields.
 
-Ventilation is opcode `0xAB` and cleaning is opcode `0xA1`, both only while the heater is off (or already in that mode). The Running Mode select shows them on Warm Drive in standby. Status `5A25` maps state `171` to Ventilation and `170` to Cleaning. The weekly timer is still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
+Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
 

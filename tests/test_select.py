@@ -38,8 +38,6 @@ def create_mock_coordinator(protocol_mode: int = 1) -> MagicMock:
     coordinator.async_set_backlight = AsyncMock()
     coordinator.async_add_listener = MagicMock(return_value=MagicMock())
     coordinator.burnoff_active = False
-    coordinator.is_warm_drive_controller = False
-    coordinator.warm_drive_aux_supported = False
     coordinator.data = {
         "connected": True,
         "running_mode": 1,  # Level mode
@@ -209,53 +207,6 @@ class TestVevorHeaterModeSelect:
 
             assert "Ventilation" not in select.options
 
-    def test_warm_drive_hides_aux_modes_until_controller_reports_them(self):
-        """Warm Drive without 170/171 does not list Ventilation or Cleaning."""
-        coordinator = create_mock_coordinator(protocol_mode=0)
-        coordinator.is_warm_drive_controller = True
-        coordinator.warm_drive_aux_supported = False
-        coordinator.data["running_step"] = 0
-        select = VevorHeaterModeSelect(coordinator)
-
-        assert "Ventilation" not in select.options
-        assert "Cleaning" not in select.options
-
-    def test_warm_drive_options_include_ventilation_and_cleaning_when_standby(self):
-        """Warm Drive offers Ventilation and Cleaning after the board reports them."""
-        coordinator = create_mock_coordinator(protocol_mode=0)
-        coordinator.is_warm_drive_controller = True
-        coordinator.warm_drive_aux_supported = True
-        coordinator.data["running_step"] = 0
-        select = VevorHeaterModeSelect(coordinator)
-
-        assert "Ventilation" in select.options
-        assert "Cleaning" in select.options
-
-    def test_warm_drive_options_keep_cleaning_while_ventilating(self):
-        """Warm Drive keeps both aux options after Ventilation is selected."""
-        coordinator = create_mock_coordinator(protocol_mode=0)
-        coordinator.is_warm_drive_controller = True
-        coordinator.warm_drive_aux_supported = True
-        coordinator.data["running_step"] = 6
-        select = VevorHeaterModeSelect(coordinator)
-
-        assert "Ventilation" in select.options
-        assert "Cleaning" in select.options
-
-    def test_warm_drive_current_option_cleaning(self):
-        """Current option is Cleaning while Warm Drive reports state 170."""
-        from custom_components.diesel_heater.const import RUNNING_STEP_CLEANING
-
-        coordinator = create_mock_coordinator(protocol_mode=0)
-        coordinator.is_warm_drive_controller = True
-        coordinator.warm_drive_aux_supported = True
-        coordinator.data["running_step"] = RUNNING_STEP_CLEANING
-        select = VevorHeaterModeSelect(coordinator)
-
-        assert select.current_option == "Cleaning"
-        assert "Cleaning" in select.options
-        assert "Ventilation" in select.options
-
     def test_current_option_ventilation_when_ventilating(self):
         """Test current_option returns Ventilation when running_step is ventilation."""
         coordinator = create_mock_coordinator(protocol_mode=5)  # ABBA
@@ -275,19 +226,6 @@ class TestVevorHeaterModeSelect:
         await select.async_select_option("Ventilation")
 
         coordinator.async_set_mode.assert_called_once_with(3)  # RUNNING_MODE_VENTILATION
-
-    @pytest.mark.asyncio
-    async def test_async_select_option_cleaning(self):
-        """Test selecting cleaning mode for Warm Drive."""
-        coordinator = create_mock_coordinator(protocol_mode=0)
-        coordinator.is_warm_drive_controller = True
-        coordinator.warm_drive_aux_supported = True
-        coordinator.data["running_step"] = 0
-        select = VevorHeaterModeSelect(coordinator)
-
-        await select.async_select_option("Cleaning")
-
-        coordinator.async_set_mode.assert_called_once_with(4)
 
     @pytest.mark.asyncio
     async def test_async_added_to_hass(self):

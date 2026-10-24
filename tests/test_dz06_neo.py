@@ -10,13 +10,10 @@ from custom_components.diesel_heater.burnoff import BurnoffController
 from custom_components.diesel_heater.const import (
     CONF_BURNOFF_ENABLED,
     CONF_NEO_CONTROLLER_TYPE,
-    CONF_WARM_DRIVE_AUX_MODES,
-    RUNNING_MODE_CLEANING,
     RUNNING_MODE_LEVEL,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
     RUNNING_STATE_ON,
-    RUNNING_STEP_CLEANING,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_RUNNING,
     RUNNING_STEP_STANDBY,
@@ -87,8 +84,6 @@ def coordinator_for_layout(
     )
     coordinator.data = {"connected": False, "running_state": 1}
     coordinator.config_entry = SimpleNamespace(data={})
-    coordinator._warm_drive_held_aux = None
-    coordinator._warm_drive_aux_busy = False
     coordinator._burnoff = BurnoffController(coordinator)
     coordinator._notification_data = None
     coordinator._neo_run_settings_received = False
@@ -399,29 +394,26 @@ def test_warm_drive_telemetry_clears_after_disconnect() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw_state", "expected_state", "expected_step", "expected_mode"),
+    ("raw_state", "expected_state", "expected_step"),
     [
-        (160, 0, RUNNING_STEP_STANDBY, None),
-        (170, 1, RUNNING_STEP_CLEANING, RUNNING_MODE_CLEANING),
-        (171, 1, RUNNING_STEP_VENTILATION, RUNNING_MODE_VENTILATION),
+        (160, 0, RUNNING_STEP_STANDBY),
+        (170, 1, RUNNING_STEP_RUNNING),
+        (171, 1, RUNNING_STEP_VENTILATION),
     ],
 )
 def test_5a25_maps_warm_drive_extended_states(
-    raw_state: int, expected_state: int, expected_step: int, expected_mode: int | None,
+    raw_state: int, expected_state: int, expected_step: int,
 ) -> None:
     coordinator = coordinator_for_layout(True)
     frame = bytearray(39)
-    frame[:2], frame[3], frame[34] = b"Z%", raw_state, 2
+    frame[:2], frame[3] = b"Z%", raw_state
 
     coordinator._notification_callback(FFF2, frame)
 
     assert coordinator.data["running_state"] == expected_state
     assert coordinator.data["running_step"] == expected_step
-    if expected_mode is not None:
-        assert coordinator.data["running_mode"] == expected_mode
-        assert coordinator.warm_drive_aux_supported is True
-    else:
-        assert coordinator.warm_drive_aux_supported is False
+    if raw_state == 171:
+        assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
 
 
 def test_5a25_unknown_state_preserves_previous_running_state() -> None:
@@ -437,180 +429,6 @@ def test_neo_command_packets_match_app_vectors() -> None:
     assert VevorHeaterCoordinator._neo_packet(0x51, 1, 30, 1) == bytearray.fromhex("a5090151011e00010134eb")
     assert VevorHeaterCoordinator._neo_packet(0x5A, 2, 30, 1500) == bytearray.fromhex("a509015a021e05dc011ee7")
     assert VevorHeaterCoordinator._neo_packet(0x5C, 2, 30, 1500) == bytearray.fromhex("a509015c021e05dc0178e7")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("mode", "opcode", "raw_state"),
-    [
-        (RUNNING_MODE_VENTILATION, 0xAB, 171),
-        (RUNNING_MODE_CLEANING, 0xA1, 170),
-    ],
-)
-async def test_warm_drive_aux_mode_writes_off_only_opcode(
-    mode: int, opcode: int, raw_state: int,
-) -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.config_entry.data[CONF_WARM_DRIVE_AUX_MODES] = True
-    coordinator.data.update(
-        {
-            "neo_raw_state": 0,
-            "running_step": RUNNING_STEP_STANDBY,
-            "neo_run_type": 2,
-            "set_temp": 15,
-            "altitude": 91,
-            "neo_min_target": 8,
-            "neo_max_target": 35,
-        }
-    )
-    response = bytearray(39)
-    response[:2], response[3] = b"Z%", raw_state
-    coordinator._write_gatt = AsyncMock(
-        side_effect=lambda packet: coordinator._notification_callback(FFF2, response)
-    )
-
-    assert await coordinator.async_set_mode(mode) is True
-    packets = [call.args[0] for call in coordinator._write_gatt.await_args_list]
-    assert any(packet[:4] == bytearray((0xA5, 0x09, 0x01, opcode)) for packet in packets)
-    assert all(packet[3] != 0x00 for packet in packets)
-
-
-@pytest.mark.asyncio
-async def test_warm_drive_aux_mode_rejected_while_heating() -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.config_entry.data[CONF_WARM_DRIVE_AUX_MODES] = True
-    coordinator.data.update(
-        {
-            "neo_raw_state": 4,
-            "running_step": RUNNING_STEP_RUNNING,
-            "running_state": RUNNING_STATE_ON,
-        }
-    )
-    coordinator._write_gatt = AsyncMock()
-
-    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is False
-    coordinator._write_gatt.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_warm_drive_aux_mode_skips_write_when_already_active() -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.data.update(
-        {
-            "neo_raw_state": 171,
-            "running_step": RUNNING_STEP_VENTILATION,
-        }
-    )
-    coordinator._write_gatt = AsyncMock()
-
-    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
-    coordinator._write_gatt.assert_not_awaited()
-    coordinator.async_request_refresh.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_warm_drive_aux_mode_from_standby_160_sends_off_first() -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.config_entry.data[CONF_WARM_DRIVE_AUX_MODES] = True
-    coordinator.data.update(
-        {
-            "neo_raw_state": 160,
-            "running_step": RUNNING_STEP_STANDBY,
-            "neo_run_type": 2,
-            "set_temp": 15,
-            "altitude": 91,
-            "neo_min_target": 8,
-            "neo_max_target": 35,
-        }
-    )
-
-    def on_write(packet: bytearray) -> None:
-        frame = bytearray(39)
-        frame[:2] = b"Z%"
-        frame[3] = 0 if packet[3] == 0x5C else 171
-        coordinator._notification_callback(FFF2, frame)
-
-    coordinator._write_gatt = AsyncMock(side_effect=on_write)
-
-    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
-    opcodes = [call.args[0][3] for call in coordinator._write_gatt.await_args_list]
-    assert opcodes[0] == 0x5C
-    assert 0xAB in opcodes
-    assert 0x00 not in opcodes
-
-
-@pytest.mark.asyncio
-async def test_warm_drive_aux_keeps_mode_when_5a25_stays_raw_zero() -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.config_entry.data[CONF_WARM_DRIVE_AUX_MODES] = True
-    coordinator.data.update(
-        {
-            "neo_raw_state": 0,
-            "running_step": RUNNING_STEP_STANDBY,
-            "neo_run_type": 1,
-            "set_temp": 15,
-            "altitude": 1,
-            "neo_min_target": 8,
-            "neo_max_target": 35,
-        }
-    )
-    idle = bytearray(39)
-    idle[:2] = b"Z%"
-    coordinator._write_gatt = AsyncMock(
-        side_effect=lambda packet: coordinator._notification_callback(FFF2, idle)
-    )
-
-    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
-    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
-    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
-
-    coordinator._notification_callback(FFF2, idle)
-    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
-    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
-    coordinator._client = SimpleNamespace(is_connected=True)
-    coordinator._write_gatt.reset_mock()
-    assert await coordinator._send_command(1, 0) is True
-    coordinator._write_gatt.assert_not_awaited()
-
-    late_standby = bytearray(39)
-    late_standby[:2], late_standby[3] = b"Z%", 160
-    coordinator._notification_callback(FFF2, late_standby)
-    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
-    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
-
-
-@pytest.mark.asyncio
-async def test_warm_drive_aux_mode_hidden_until_reported() -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.data.update(
-        {
-            "neo_raw_state": 0,
-            "running_step": RUNNING_STEP_STANDBY,
-        }
-    )
-    coordinator._write_gatt = AsyncMock()
-
-    assert coordinator.warm_drive_aux_supported is False
-    assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is False
-    coordinator._write_gatt.assert_not_awaited()
-
-
-@pytest.mark.parametrize("raw_state", [170, 171])
-def test_5a25_aux_state_persists_aux_support(raw_state: int) -> None:
-    coordinator = coordinator_for_layout(True)
-    coordinator.hass = MagicMock()
-
-    def persist(_entry: object, data: dict) -> None:
-        coordinator.config_entry.data = data
-
-    coordinator.hass.config_entries.async_update_entry.side_effect = persist
-    frame = bytearray(39)
-    frame[:2], frame[3], frame[34] = b"Z%", raw_state, 2
-    coordinator._notification_callback(FFF2, frame)
-
-    assert coordinator.config_entry.data[CONF_WARM_DRIVE_AUX_MODES] is True
-    coordinator.data["neo_raw_state"] = 0
-    assert coordinator.warm_drive_aux_supported is True
 
 
 @pytest.mark.asyncio
