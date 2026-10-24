@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.37` is beta.36 plus keeping Warm Drive ventilation and cleaning in HA when `5A25` still reports raw `0`. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.38` is beta.37 plus skipping opcode-0 status polls after Warm Drive ventilation and cleaning, so HA does not snap the LCD back to Level/Temp. Both options stay in the mode list. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -703,6 +703,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.35` | `9bec65e` | Ventilation `0xAB` and cleaning `0xA1` while off |
 | `v2.1.5-beta.36` | `8d7ba1f` | Poll after vent/clean; off first from standby 160 |
 | `v2.1.5-beta.37` | `1e18126` | Keep vent/clean in HA when `5A25` raw state stays 0 |
+| `v2.1.5-beta.38` | | Skip opcode-0 polls while vent/clean is held; keep both options visible |
 
 ### What stayed the same
 

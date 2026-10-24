@@ -218,15 +218,15 @@ class TestVevorHeaterModeSelect:
         assert "Ventilation" in select.options
         assert "Cleaning" in select.options
 
-    def test_warm_drive_options_exclude_cleaning_while_ventilating(self):
-        """Cleaning stays hidden until Warm Drive ventilation ends."""
+    def test_warm_drive_options_keep_cleaning_while_ventilating(self):
+        """Warm Drive keeps both aux options after Ventilation is selected."""
         coordinator = create_mock_coordinator(protocol_mode=0)
         coordinator.is_warm_drive_controller = True
         coordinator.data["running_step"] = 6
         select = VevorHeaterModeSelect(coordinator)
 
         assert "Ventilation" in select.options
-        assert "Cleaning" not in select.options
+        assert "Cleaning" in select.options
 
     def test_warm_drive_current_option_cleaning(self):
         """Current option is Cleaning while Warm Drive reports state 170."""
@@ -239,7 +239,7 @@ class TestVevorHeaterModeSelect:
 
         assert select.current_option == "Cleaning"
         assert "Cleaning" in select.options
-        assert "Ventilation" not in select.options
+        assert "Ventilation" in select.options
 
     def test_current_option_ventilation_when_ventilating(self):
         """Test current_option returns Ventilation when running_step is ventilation."""

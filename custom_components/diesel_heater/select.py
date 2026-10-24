@@ -165,15 +165,15 @@ class VevorHeaterModeSelect(SelectEntity):
 
         running_step = self.coordinator.data.get("running_step")
         warm_drive = self.coordinator.is_warm_drive_controller is True
-        if (self.coordinator.protocol_mode == 5 or warm_drive) and running_step in (
+        if self.coordinator.protocol_mode == 5 and running_step in (
             RUNNING_STEP_STANDBY,
             RUNNING_STEP_VENTILATION,
         ):
             base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
-        if warm_drive and running_step in (
-            RUNNING_STEP_STANDBY,
-            RUNNING_STEP_CLEANING,
-        ):
+        if warm_drive:
+            # Keep both visible; hiding Cleaning while "ventilating" made it
+            # look like the second option vanished after a tap.
+            base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
             base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING])
 
         return base_options

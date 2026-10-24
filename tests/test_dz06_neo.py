@@ -465,7 +465,7 @@ async def test_warm_drive_aux_mode_writes_off_only_opcode(
     assert await coordinator.async_set_mode(mode) is True
     packets = [call.args[0] for call in coordinator._write_gatt.await_args_list]
     assert any(packet[:4] == bytearray((0xA5, 0x09, 0x01, opcode)) for packet in packets)
-    assert packets[-1][:4] == bytearray((0xA5, 0x09, 0x01, 0x00))
+    assert all(packet[3] != 0x00 for packet in packets)
 
 
 @pytest.mark.asyncio
@@ -497,7 +497,7 @@ async def test_warm_drive_aux_mode_skips_write_when_already_active() -> None:
 
     assert await coordinator.async_set_mode(RUNNING_MODE_VENTILATION) is True
     coordinator._write_gatt.assert_not_awaited()
-    coordinator.async_request_refresh.assert_awaited()
+    coordinator.async_request_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -527,6 +527,7 @@ async def test_warm_drive_aux_mode_from_standby_160_sends_off_first() -> None:
     opcodes = [call.args[0][3] for call in coordinator._write_gatt.await_args_list]
     assert opcodes[0] == 0x5C
     assert 0xAB in opcodes
+    assert 0x00 not in opcodes
 
 
 @pytest.mark.asyncio
@@ -554,6 +555,16 @@ async def test_warm_drive_aux_keeps_mode_when_5a25_stays_raw_zero() -> None:
     assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
 
     coordinator._notification_callback(FFF2, idle)
+    assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
+    assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
+    coordinator._client = SimpleNamespace(is_connected=True)
+    coordinator._write_gatt.reset_mock()
+    assert await coordinator._send_command(1, 0) is True
+    coordinator._write_gatt.assert_not_awaited()
+
+    late_standby = bytearray(39)
+    late_standby[:2], late_standby[3] = b"Z%", 160
+    coordinator._notification_callback(FFF2, late_standby)
     assert coordinator.data["running_step"] == RUNNING_STEP_VENTILATION
     assert coordinator.data["running_mode"] == RUNNING_MODE_VENTILATION
 

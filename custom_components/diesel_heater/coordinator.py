@@ -2176,12 +2176,13 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     self.data["running_state"] = RUNNING_STATE_OFF
                     self.data["running_step"] = RUNNING_STEP_COOLDOWN
                 elif (
-                    raw_state == 0
+                    raw_state in (0, WARM_DRIVE_RAW_STANDBY)
                     and getattr(self, "_warm_drive_held_aux", None)
                     in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
                 ):
                     # This firmware can light the LCD for 0xAB/0xA1 while 5A25
-                    # byte 3 stays 0. Keep the mode HA just sent until off/heat.
+                    # byte 3 stays 0 or 160. Keep the mode HA just sent until
+                    # off/heat. A late standby frame after 0x5C must not clear it.
                     self._apply_warm_drive_held_aux(self._warm_drive_held_aux)
                 elif raw_state in (0, WARM_DRIVE_RAW_STANDBY):
                     self._warm_drive_held_aux = None
@@ -2201,7 +2202,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     WARM_DRIVE_RAW_CLEANING,
                     WARM_DRIVE_RAW_VENTILATION,
                 ) and not (
-                    raw_state == 0
+                    raw_state in (0, WARM_DRIVE_RAW_STANDBY)
                     and getattr(self, "_warm_drive_held_aux", None)
                     in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
                 ):
@@ -2820,15 +2821,6 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         """
         return self.data.get("neo_raw_state") in (0, WARM_DRIVE_RAW_STANDBY)
 
-    async def _async_wait_warm_drive_raw_state(self, expected_raw: int) -> bool:
-        """Wait up to 2s for 5A25 to report the requested raw state."""
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if self.data.get("neo_raw_state") == expected_raw:
-                return True
-            await asyncio.sleep(0.1)
-        return self.data.get("neo_raw_state") == expected_raw
-
     async def _async_write_warm_drive_opcode(self, opcode: int) -> bool:
         """Write one A5/09 opcode using the last poll settings."""
         run_type, target, altitude = self._neo_status_poll_settings()
@@ -2849,11 +2841,6 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if opcode != 0x00:
             await asyncio.sleep(0.1)
         return True
-
-    async def _async_poll_warm_drive_status(self) -> None:
-        """Ask for a 5A25. Aux opcodes do not emit status by themselves."""
-        await asyncio.sleep(0.5)
-        await self._async_write_warm_drive_opcode(0x00)
 
     def _apply_warm_drive_held_aux(self, mode: int) -> None:
         """Keep ventilation/cleaning in HA while 5A25 still reports raw 0."""
@@ -2888,7 +2875,6 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self.data.get("running_step") == already_step
             or self.data.get("neo_raw_state") == expected_raw
         ):
-            await self.async_request_refresh()
             return True
         if not self._warm_drive_can_start_aux():
             self._logger.warning(
@@ -2900,41 +2886,29 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return False
         self._warm_drive_aux_busy = True
         try:
-            return await self._async_send_warm_drive_aux(mode, opcode, expected_raw, action)
+            return await self._async_send_warm_drive_aux(mode, opcode, action)
         finally:
             self._warm_drive_aux_busy = False
 
     async def _async_send_warm_drive_aux(
-        self, mode: int, opcode: int, expected_raw: int, action: str
+        self, mode: int, opcode: int, action: str
     ) -> bool:
         if self.data.get("neo_raw_state") == WARM_DRIVE_RAW_STANDBY:
             self._logger.info("Warm Drive %s: standby 160, sending off first", action)
             if not await self._async_write_warm_drive_opcode(0x5C):
                 return False
-            await self._async_poll_warm_drive_status()
-            if not await self._async_wait_warm_drive_raw_state(0):
-                self._logger.info(
-                    "Warm Drive %s: still raw_state=%s after off, sending %s anyway",
-                    action,
-                    self.data.get("neo_raw_state"),
-                    action,
-                )
         if not await self._async_write_warm_drive_opcode(opcode):
             return False
         self._apply_warm_drive_held_aux(mode)
-        await self._async_poll_warm_drive_status()
-        confirmed = await self._async_wait_warm_drive_raw_state(expected_raw)
-        if not confirmed:
-            self._logger.info(
-                "Warm Drive %s sent; 5A25 still raw_state=%s (keeping %s in HA)",
-                action,
-                self.data.get("neo_raw_state"),
-                action,
-            )
+        # Do not send opcode 0 after this. A status poll can cancel 0xAB/0xA1.
+        self._logger.info(
+            "Warm Drive %s sent (raw_state=%s); skipping status poll while %s is active",
+            action,
+            self.data.get("neo_raw_state"),
+            action,
+        )
         if getattr(self, "hass", None) is not None:
             self.async_set_updated_data(self.data)
-        else:
-            await self.async_request_refresh()
         return True
 
     def _warm_drive_config_packet(self, overrides: dict[int, int]) -> bytearray | None:
@@ -3360,10 +3334,18 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if self.is_dz06_neo:
             if command == 1:
-                if getattr(self, "_warm_drive_aux_busy", False):
+                if getattr(self, "_warm_drive_aux_busy", False) or getattr(
+                    self, "_warm_drive_held_aux", None
+                ):
                     return True
                 packet = self._neo_packet(0x00, *self._neo_status_poll_settings())
                 self._notification_data = None
+                # Re-check after building the packet: an in-flight poll that
+                # passed the first guard can still cancel 0xAB/0xA1.
+                if getattr(self, "_warm_drive_aux_busy", False) or getattr(
+                    self, "_warm_drive_held_aux", None
+                ):
+                    return True
                 try:
                     await self._write_gatt(packet)
                 except Exception as err:
