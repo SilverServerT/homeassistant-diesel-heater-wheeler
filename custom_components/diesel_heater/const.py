@@ -275,10 +275,10 @@ WARM_DRIVE_PUMP_SIZE_OPTIONS: Final = {
     3: "32 mL",
 }
 
-# Pamphlet app oilType byte 3. Live MUDIRO 5C16 used 1; tests use 0.
+# Pamphlet app oilTypeMap: diesel_oil → 1, gasoline → 2. Live MUDIRO 5C16 is 1.
 WARM_DRIVE_OIL_TYPE_OPTIONS: Final = {
-    0: "Diesel",
-    1: "Kerosene",
+    1: "Diesel",
+    2: "Gasoline",
 }
 
 # Pump type options (byte 29) - verified by @Xev testing

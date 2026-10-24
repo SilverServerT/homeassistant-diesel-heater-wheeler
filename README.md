@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.40` is `v2.1.5-beta.34` again. Warm Drive ventilation (`0xAB`) and cleaning (`0xA1`) from beta.35–39 are withdrawn; this MUDIRO LCD does not have those modes. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.41` is beta.40 plus the pamphlet oil-type labels: `5C16` byte 3 is `1` diesel and `2` gasoline. Warm Drive ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -702,6 +702,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.34` | `3b2d8b1` | Oil type, heat limits, oil Hz, fan RPM, and glow on `0x26` |
 | `v2.1.5-beta.35`–`.39` | | Warm Drive vent/clean (withdrawn; not on this LCD) |
 | `v2.1.5-beta.40` | `5c9e64f` | Same as beta.34; Warm Drive vent/clean removed |
+| `v2.1.5-beta.41` | | Oil type `1` diesel, `2` gasoline (not kerosene) |
 
 ### What stayed the same
 
@@ -724,7 +725,7 @@ A change reads `5C16` first and aborts if that read fails or no config is stored
 
 | `5C16` byte | Meaning | Entity |
 | --- | --- | --- |
-| 3 | Oil type. `0` diesel, `1` kerosene | Oil Type |
+| 3 | Oil type. `1` diesel, `2` gasoline | Oil Type |
 | 4–5 | Min/max °C | Heat Reset / Heat Stop Temperature |
 | 6–7 | Min/max pump Hz | Min/Max Oil Frequency |
 | 8–11 | Min/max fan RPM, uint16 BE | Min/Max Fan Speed |

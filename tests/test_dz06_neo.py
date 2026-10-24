@@ -1178,17 +1178,33 @@ async def test_warm_drive_auto_start_stop_keeps_state_on_write_failure() -> None
 async def test_warm_drive_oil_type_writes_0x26_byte_3() -> None:
     coordinator = coordinator_for_layout(True)
     coordinator._notification_callback(
-        FFF2, neo_config_response(oil_type=0, auto_start=1)
+        FFF2, neo_config_response(oil_type=1, auto_start=1)
     )
     coordinator._write_gatt = AsyncMock()
 
-    await coordinator.async_set_warm_drive_oil_type(1)
+    await coordinator.async_set_warm_drive_oil_type(2)
 
     packet = coordinator._write_gatt.await_args.args[0]
     assert packet[0] == 0x26
-    assert packet[3] == 1
+    assert packet[3] == 2
     assert packet[14] == 1
+    assert coordinator.data["oil_type"] == 2
+
+
+def test_warm_drive_oil_type_1_is_diesel() -> None:
+    from custom_components.diesel_heater.const import WARM_DRIVE_OIL_TYPE_OPTIONS
+    from custom_components.diesel_heater.select import VevorWarmDriveOilTypeSelect
+
+    coordinator = coordinator_for_layout(True)
+    coordinator.address = "C8:17:F5:28:E7:9D"
+    coordinator.data["connected"] = True
+    coordinator._notification_callback(FFF2, neo_config_response(oil_type=1))
+    select = VevorWarmDriveOilTypeSelect(coordinator)
+
     assert coordinator.data["oil_type"] == 1
+    assert select.current_option == "Diesel"
+    assert WARM_DRIVE_OIL_TYPE_OPTIONS[1] == "Diesel"
+    assert WARM_DRIVE_OIL_TYPE_OPTIONS[2] == "Gasoline"
 
 
 @pytest.mark.asyncio
