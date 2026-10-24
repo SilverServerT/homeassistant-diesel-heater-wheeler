@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.33` is beta.25 plus pamphlet-app settings and Warm Drive gear 1–10 mapped onto the controller’s 8–35 window. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.34` is beta.25 plus pamphlet-app `0x26` board settings and Warm Drive gear 1–10 mapped onto the controller’s 8–35 window. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -699,6 +699,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.31` | `e9e0568` | Verified MUDIRO 5 kW Warm Drive build record |
 | `v2.1.5-beta.32` | `148b915` | Warm Drive Level 1–10 via native `0x51` run type 1 |
 | `v2.1.5-beta.33` | `28a66ec` | Level 1–10 mapped onto the 8–35 `0x51` window |
+| `v2.1.5-beta.34` | | Oil type, heat limits, oil Hz, fan RPM, and glow on `0x26` |
 
 ### What stayed the same
 
@@ -721,6 +722,11 @@ A change reads `5C16` first and aborts if that read fails or no config is stored
 
 | `5C16` byte | Meaning | Entity |
 | --- | --- | --- |
+| 3 | Oil type. `0` diesel, `1` kerosene | Oil Type |
+| 4–5 | Min/max °C | Heat Reset / Heat Stop Temperature |
+| 6–7 | Min/max pump Hz | Min/Max Oil Frequency |
+| 8–11 | Min/max fan RPM, uint16 BE | Min/Max Fan Speed |
+| 12 | Glow-plug power | Glow Plug Power |
 | 13 | Work mode. `2` is max heat on. Off writes `1` | Max Heat |
 | 14 | Auto start. `1` on, `0` off | Auto Start/Stop |
 | 15 | Tank code 0–5 | Tank Volume |
@@ -750,7 +756,7 @@ On `C8:17:F5:28:E7:9D` with beta.30, the 23:24 session completed `5C16` (8–35�
 
 Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same logged fields.
 
-Ventilation, cleaning, oil type, heat reset and stop temperatures, oil frequency, fan RPM limits, and glow-plug power are still not sent.
+Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
 

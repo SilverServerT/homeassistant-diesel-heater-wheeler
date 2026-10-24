@@ -25,6 +25,7 @@ from .const import (
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_VENTILATION,
     TANK_VOLUME_OPTIONS,
+    WARM_DRIVE_OIL_TYPE_OPTIONS,
     WARM_DRIVE_TANK_VOLUME_OPTIONS,
 )
 from .coordinator import VevorHeaterCoordinator
@@ -72,6 +73,9 @@ async def async_setup_entry(
     # @Xev: Hcalory needs selector instead of binary switch (issue #34)
     if mode == 7:
         entities.append(VevorHighAltitudeModeSelect(coordinator))
+
+    if mode == 0 or coordinator.is_warm_drive_controller is True:
+        entities.append(VevorWarmDriveOilTypeSelect(coordinator))
 
     async_add_entities(entities)
 
@@ -539,6 +543,62 @@ class VevorHighAltitudeModeSelect(SelectEntity):
                 await self.coordinator.async_set_altitude_mode(value)
                 return
         _LOGGER.error("Unknown high altitude mode option: %s", option)
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
+
+
+class VevorWarmDriveOilTypeSelect(SelectEntity):
+    """Warm Drive pamphlet oil type (0x26 byte 3)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Oil Type"
+    _attr_icon = "mdi:barrel"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = list(WARM_DRIVE_OIL_TYPE_OPTIONS.values())
+
+    def __init__(self, coordinator: VevorHeaterCoordinator) -> None:
+        """Initialize the select entity."""
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{coordinator.address}_oil_type"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.address)},
+            "name": "Vevor Diesel Heater",
+            "manufacturer": "Vevor",
+            "model": "Diesel Heater",
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return true when Warm Drive has reported oil type."""
+        return (
+            self.coordinator.data.get("connected", False)
+            and self.coordinator.is_warm_drive_controller is True
+            and self.coordinator.data.get("oil_type") is not None
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current oil type."""
+        oil_type = self.coordinator.data.get("oil_type")
+        if oil_type is None:
+            return None
+        return WARM_DRIVE_OIL_TYPE_OPTIONS.get(oil_type, f"Type {oil_type}")
+
+    async def async_select_option(self, option: str) -> None:
+        """Change the oil type."""
+        for code, name in WARM_DRIVE_OIL_TYPE_OPTIONS.items():
+            if name == option:
+                await self.coordinator.async_set_warm_drive_oil_type(code)
+                return
+        _LOGGER.error("Unknown oil type: %s", option)
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""

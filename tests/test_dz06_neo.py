@@ -41,14 +41,21 @@ def neo_config_response(
     max_fan: int = 4500,
     work_mode: int = 0,
     pump: int = 0,
+    oil_type: int = 0,
+    min_pump: int = 0,
+    max_pump: int = 0,
+    glow: int = 0,
 ) -> bytearray:
     """Build the full 0x5C/0x16 configuration frame parsed by the Neo app."""
     frame = bytearray(24)
     frame[:2] = bytearray((0x5C, 0x16))
     frame[2] = device_type
+    frame[3] = oil_type
     frame[4], frame[5] = minimum, maximum
+    frame[6], frame[7] = min_pump, max_pump
     frame[8:10] = min_fan.to_bytes(2, "big")
     frame[10:12] = max_fan.to_bytes(2, "big")
+    frame[12] = glow
     frame[13] = work_mode
     frame[14] = auto_start
     frame[16] = pump
@@ -970,6 +977,11 @@ def test_warm_drive_5c16_reads_max_heat_and_pump_size() -> None:
 
     assert coordinator.data["max_heat"] is True
     assert coordinator.data["pump_type"] == 1
+    assert coordinator.data["oil_type"] == 0
+    assert coordinator.data["pump_min_hz"] == 0
+    assert coordinator.data["fan_min_rpm"] == 1600
+    assert coordinator.data["fan_max_rpm"] == 4500
+    assert coordinator.data["glow_power"] == 0
 
     coordinator._notification_callback(FFF2, neo_config_response(work_mode=1, pump=0))
     assert coordinator.data["max_heat"] is False
@@ -1160,3 +1172,107 @@ async def test_warm_drive_auto_start_stop_keeps_state_on_write_failure() -> None
     await coordinator.async_set_auto_start_stop(True)
 
     assert coordinator.data["auto_start_stop"] is False
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_oil_type_writes_0x26_byte_3() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(oil_type=0, auto_start=1)
+    )
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_oil_type(1)
+
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[0] == 0x26
+    assert packet[3] == 1
+    assert packet[14] == 1
+    assert coordinator.data["oil_type"] == 1
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_temp_limits_write_0x26_bytes_4_and_5() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(FFF2, neo_config_response(minimum=8, maximum=35))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_temp_limit("min", 10)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[4] == 10
+    assert packet[5] == 35
+    assert coordinator.data["neo_min_target"] == 10
+
+    await coordinator.async_set_warm_drive_temp_limit("max", 32)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[4] == 10
+    assert packet[5] == 32
+    assert coordinator.data["neo_max_target"] == 32
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_rejects_inverted_temp_limits() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(FFF2, neo_config_response(minimum=8, maximum=35))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_temp_limit("min", 40)
+
+    coordinator._write_gatt.assert_not_awaited()
+    assert coordinator.data["neo_min_target"] == 8
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_pump_hz_writes_0x26_bytes_6_and_7() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(min_pump=15, max_pump=55)
+    )
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_pump_hz("max", 50)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[6] == 15
+    assert packet[7] == 50
+    assert coordinator.data["pump_max_hz"] == 50
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_pump_hz_keeps_stored_zero_minimum() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(min_pump=0, max_pump=55)
+    )
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_pump_hz("max", 40)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[6] == 0
+    assert packet[7] == 40
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_fan_rpm_writes_0x26_bytes_8_to_11() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(
+        FFF2, neo_config_response(min_fan=1600, max_fan=4500)
+    )
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_fan_rpm("min", 1800)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[8:10] == (1800).to_bytes(2, "big")
+    assert packet[10:12] == (4500).to_bytes(2, "big")
+    assert coordinator.data["fan_min_rpm"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_warm_drive_glow_writes_0x26_byte_12() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator._notification_callback(FFF2, neo_config_response(glow=5))
+    coordinator._write_gatt = AsyncMock()
+
+    await coordinator.async_set_warm_drive_glow_power(8)
+    packet = coordinator._write_gatt.await_args.args[0]
+    assert packet[12] == 8
+    assert coordinator.data["glow_power"] == 8

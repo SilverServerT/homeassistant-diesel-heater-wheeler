@@ -275,6 +275,12 @@ WARM_DRIVE_PUMP_SIZE_OPTIONS: Final = {
     3: "32 mL",
 }
 
+# Pamphlet app oilType byte 3. Live MUDIRO 5C16 used 1; tests use 0.
+WARM_DRIVE_OIL_TYPE_OPTIONS: Final = {
+    0: "Diesel",
+    1: "Kerosene",
+}
+
 # Pump type options (byte 29) - verified by @Xev testing
 # Values 20/21 indicate RF433 remote status (not pump type)
 PUMP_TYPE_OPTIONS: Final = {

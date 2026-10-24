@@ -2090,11 +2090,23 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     self.data["tank_volume"] = data[15]
                     self.data["max_heat"] = data[13] == 2
                     self.data["pump_type"] = data[16]
+                    self.data["oil_type"] = data[3]
+                    self.data["pump_min_hz"] = data[6]
+                    self.data["pump_max_hz"] = data[7]
+                    self.data["fan_min_rpm"] = int.from_bytes(data[8:10], "big")
+                    self.data["fan_max_rpm"] = int.from_bytes(data[10:12], "big")
+                    self.data["glow_power"] = data[12]
                 self._logger.info(
-                    "DZ06 5C16 min=%s max=%s type_byte=%s auto_start=%s max_heat=%s pump=%s warm_drive=%s",
+                    "DZ06 5C16 min=%s max=%s type_byte=%s oil=%s pump_hz=%s-%s fan=%s-%s glow=%s auto_start=%s max_heat=%s pump=%s warm_drive=%s",
                     self.data.get("neo_min_target"),
                     self.data.get("neo_max_target"),
                     data[2],
+                    self.data.get("oil_type"),
+                    self.data.get("pump_min_hz"),
+                    self.data.get("pump_max_hz"),
+                    self.data.get("fan_min_rpm"),
+                    self.data.get("fan_max_rpm"),
+                    self.data.get("glow_power"),
                     self.data.get("auto_start_stop"),
                     self.data.get("max_heat"),
                     self.data.get("pump_type"),
@@ -4264,6 +4276,127 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             {16: code},
             {"pump_type": code},
             action="pump size",
+        )
+
+    def _warm_drive_u16_bytes(self, value: int) -> tuple[int, int]:
+        """Split a 0-65535 value into the two big-endian 0x26 bytes."""
+        value = max(0, min(0xFFFF, int(value)))
+        return (value >> 8) & 0xFF, value & 0xFF
+
+    def _warm_drive_int(self, key: str, default: int) -> int:
+        """Return a stored 5C16 integer, treating only None as missing."""
+        raw = self.data.get(key)
+        if raw is None:
+            return default
+        return int(raw)
+
+    async def async_set_warm_drive_oil_type(self, oil_type: int) -> None:
+        """Write pamphlet oil type into 0x26 byte 3."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Oil type is only available on Warm Drive controllers")
+            return
+        code = max(0, min(1, int(oil_type)))
+        self._logger.info("Setting Warm Drive oil type to %s (0x26 byte 3)", code)
+        await self._async_write_warm_drive_config(
+            {3: code},
+            {"oil_type": code},
+            action="oil type",
+        )
+
+    async def async_set_warm_drive_temp_limit(self, which: str, value: int) -> None:
+        """Write 5C16 min/max °C (bytes 4-5), keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Temperature limits are only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("neo_min_target", 8)
+        high = self._warm_drive_int("neo_max_target", 35)
+        value = max(0, min(80, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min temperature %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max temperature %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        self._logger.info("Setting Warm Drive temperature limits %s-%s (0x26 bytes 4-5)", low, high)
+        await self._async_write_warm_drive_config(
+            {4: low, 5: high},
+            {"neo_min_target": low, "neo_max_target": high},
+            action="temperature limits",
+        )
+
+    async def async_set_warm_drive_pump_hz(self, which: str, value: int) -> None:
+        """Write pamphlet oil-frequency bytes 6-7, keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Pump frequency is only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("pump_min_hz", 1)
+        high = self._warm_drive_int("pump_max_hz", 80)
+        value = max(1, min(80, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min pump Hz %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max pump Hz %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        self._logger.info("Setting Warm Drive pump Hz %s-%s (0x26 bytes 6-7)", low, high)
+        await self._async_write_warm_drive_config(
+            {6: low, 7: high},
+            {"pump_min_hz": low, "pump_max_hz": high},
+            action="pump frequency",
+        )
+
+    async def async_set_warm_drive_fan_rpm(self, which: str, value: int) -> None:
+        """Write pamphlet fan RPM u16 BE at bytes 8-11, keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Fan RPM limits are only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("fan_min_rpm", 1000)
+        high = self._warm_drive_int("fan_max_rpm", 6000)
+        value = max(500, min(8000, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min fan RPM %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max fan RPM %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        low_hi, low_lo = self._warm_drive_u16_bytes(low)
+        high_hi, high_lo = self._warm_drive_u16_bytes(high)
+        self._logger.info("Setting Warm Drive fan RPM %s-%s (0x26 bytes 8-11)", low, high)
+        await self._async_write_warm_drive_config(
+            {8: low_hi, 9: low_lo, 10: high_hi, 11: high_lo},
+            {"fan_min_rpm": low, "fan_max_rpm": high},
+            action="fan RPM",
+        )
+
+    async def async_set_warm_drive_glow_power(self, watts: int) -> None:
+        """Write pamphlet glow-plug power into 0x26 byte 12."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Glow plug power is only available on Warm Drive controllers")
+            return
+        watts = max(1, min(120, int(watts)))
+        self._logger.info("Setting Warm Drive glow plug power to %s (0x26 byte 12)", watts)
+        await self._async_write_warm_drive_config(
+            {12: watts},
+            {"glow_power": watts},
+            action="glow power",
         )
 
     async def async_set_backlight(self, level: int) -> None:
