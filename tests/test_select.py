@@ -872,8 +872,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         entities = async_add_entities.call_args[0][0]
-        # Mode 0: mode + language + pump_type + tank_volume + backlight = 5
-        assert len(entities) == 5
+        # Mode 0: mode + language + pump_type + tank_volume + backlight + oil type
+        assert len(entities) == 6
 
     @pytest.mark.asyncio
     async def test_setup_entry_protocol_mode_1_creates_mode_only(self):
@@ -987,6 +987,7 @@ class TestAsyncSetupEntry:
         assert "VevorHeaterPumpTypeSelect" in entity_types
         assert "VevorHeaterTankVolumeSelect" in entity_types
         assert "VevorBacklightSelect" in entity_types
+        assert "VevorWarmDriveOilTypeSelect" in entity_types
 
 
 # ---------------------------------------------------------------------------

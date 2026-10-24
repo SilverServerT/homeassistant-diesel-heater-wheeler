@@ -270,6 +270,9 @@
       "auto_start_stop": {
         "name": "Auto Start/Stop"
       },
+      "max_heat": {
+        "name": "Max Heat"
+      },
       "auto_offset": {
         "name": "Auto Temperature Offset"
       },

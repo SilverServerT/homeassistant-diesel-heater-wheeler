@@ -61,6 +61,10 @@ async def async_setup_entry(
     if mode in (2, 4):
         entities.append(VevorTimerSwitch(coordinator))
 
+    # Warm Drive stays on protocol mode 0 until a later reload.
+    if mode == 0 or getattr(coordinator, "is_warm_drive_controller", False) is True:
+        entities.append(VevorMaxHeatSwitch(coordinator))
+
     async_add_entities(entities)
 
 
@@ -200,6 +204,55 @@ class VevorAutoStartStopSwitch(CoordinatorEntity[VevorHeaterCoordinator], Switch
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable auto start/stop."""
         await self.coordinator.async_set_auto_start_stop(False)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
+
+
+class VevorMaxHeatSwitch(CoordinatorEntity[VevorHeaterCoordinator], SwitchEntity):
+    """Warm Drive max-heat switch.
+
+    The pamphlet app writes 2 to 0x26 byte 13 when the icon is on and 1 when it is off.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Max Heat"
+    _attr_icon = "mdi:fire"
+
+    def __init__(self, coordinator: VevorHeaterCoordinator) -> None:
+        """Initialize the switch."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.address}_max_heat"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.address)},
+            "name": "Vevor Diesel Heater",
+            "manufacturer": "Vevor",
+            "model": "Diesel Heater",
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return if the controller has reported a Warm Drive work mode."""
+        return (
+            self.coordinator.data.get("connected", False)
+            and getattr(self.coordinator, "is_warm_drive_controller", False) is True
+            and self.coordinator.data.get("max_heat") is not None
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true when 5C16 byte 13 is 2."""
+        return self.coordinator.data.get("max_heat")
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable max heat."""
+        await self.coordinator.async_set_max_heat(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable max heat."""
+        await self.coordinator.async_set_max_heat(False)
 
     @callback
     def _handle_coordinator_update(self) -> None:

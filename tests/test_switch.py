@@ -15,6 +15,7 @@ from custom_components.diesel_heater.switch import (
     VevorTempUnitSwitch,
     VevorAltitudeUnitSwitch,
     VevorHighAltitudeSwitch,
+    VevorMaxHeatSwitch,
     async_setup_entry,
 )
 
@@ -750,6 +751,7 @@ class TestSwitchEntityAttributes:
             VevorTempUnitSwitch(coordinator),
             VevorAltitudeUnitSwitch(coordinator),
             VevorHighAltitudeSwitch(coordinator),
+            VevorMaxHeatSwitch(coordinator),
         ]
 
         for switch in switches:
@@ -768,6 +770,7 @@ class TestSwitchEntityAttributes:
             VevorTempUnitSwitch(coordinator),
             VevorAltitudeUnitSwitch(coordinator),
             VevorHighAltitudeSwitch(coordinator),
+            VevorMaxHeatSwitch(coordinator),
         ]
 
         for switch in switches:
@@ -797,8 +800,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         entities = async_add_entities.call_args[0][0]
-        # Mode 0: power + burnoff + auto_offset + auto_start_stop + temp_unit + altitude_unit + high_altitude = 7
-        assert len(entities) == 7
+        # Mode 0: power + burnoff + auto_offset + auto_start_stop + temp_unit + altitude_unit + high_altitude + max_heat = 8
+        assert len(entities) == 8
 
     @pytest.mark.asyncio
     async def test_setup_entry_protocol_mode_1_creates_core_only(self):

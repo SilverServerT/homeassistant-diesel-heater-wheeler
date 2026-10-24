@@ -3,12 +3,22 @@ from __future__ import annotations
 
 PARALLEL_UPDATES = 1
 
+from collections.abc import Awaitable, Callable
+
 from homeassistant.components.number import NumberDeviceClass, NumberEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime, UnitOfVolume
+from homeassistant.const import (
+    EntityCategory,
+    REVOLUTIONS_PER_MINUTE,
+    UnitOfFrequency,
+    UnitOfPower,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfVolume,
+)
 
 from . import VevorHeaterConfigEntry
 from .const import (
@@ -57,7 +67,6 @@ async def async_setup_entry(
             ])
     else:
         entities = [
-            VevorHeaterLevelNumber(coordinator),
             VevorHeaterTemperatureNumber(coordinator),
             VevorTankCapacityNumber(coordinator),
             VevorCurrentFuelLevelNumber(coordinator),
@@ -65,12 +74,174 @@ async def async_setup_entry(
             VevorBurnoffAfterCyclesNumber(coordinator),
             VevorBurnoffAfterHoursNumber(coordinator),
         ]
+        if not coordinator.is_dz06_neo or coordinator.is_warm_drive_controller:
+            entities.insert(0, VevorHeaterLevelNumber(coordinator))
 
         # Offset number (encrypted + CBFF protocols only)
         if mode in (0, 2, 4, 6):
             entities.append(VevorHeaterOffsetNumber(coordinator))
 
+        if mode == 0 or coordinator.is_warm_drive_controller is True:
+            entities.extend(_warm_drive_config_numbers(coordinator))
+
     async_add_entities(entities)
+
+
+def _warm_drive_config_numbers(
+    coordinator: VevorHeaterCoordinator,
+) -> list[NumberEntity]:
+    """Return pamphlet 5C16/0x26 numbers that only apply to Warm Drive."""
+    return [
+        WarmDriveConfigNumber(
+            coordinator,
+            key="neo_min_target",
+            name="Heat Reset Temperature",
+            unique_suffix="heat_reset_temperature",
+            icon="mdi:thermometer-minus",
+            native_min=1,
+            native_max=40,
+            unit=UnitOfTemperature.CELSIUS,
+            device_class=NumberDeviceClass.TEMPERATURE,
+            setter=lambda value: coordinator.async_set_warm_drive_temp_limit("min", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="neo_max_target",
+            name="Heat Stop Temperature",
+            unique_suffix="heat_stop_temperature",
+            icon="mdi:thermometer-plus",
+            native_min=8,
+            native_max=50,
+            unit=UnitOfTemperature.CELSIUS,
+            device_class=NumberDeviceClass.TEMPERATURE,
+            setter=lambda value: coordinator.async_set_warm_drive_temp_limit("max", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="pump_min_hz",
+            name="Min Oil Frequency",
+            unique_suffix="pump_min_hz",
+            icon="mdi:sine-wave",
+            native_min=1,
+            native_max=80,
+            unit=UnitOfFrequency.HERTZ,
+            device_class=NumberDeviceClass.FREQUENCY,
+            setter=lambda value: coordinator.async_set_warm_drive_pump_hz("min", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="pump_max_hz",
+            name="Max Oil Frequency",
+            unique_suffix="pump_max_hz",
+            icon="mdi:sine-wave",
+            native_min=1,
+            native_max=80,
+            unit=UnitOfFrequency.HERTZ,
+            device_class=NumberDeviceClass.FREQUENCY,
+            setter=lambda value: coordinator.async_set_warm_drive_pump_hz("max", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="fan_min_rpm",
+            name="Min Fan Speed",
+            unique_suffix="fan_min_rpm",
+            icon="mdi:fan-minus",
+            native_min=500,
+            native_max=8000,
+            unit=REVOLUTIONS_PER_MINUTE,
+            setter=lambda value: coordinator.async_set_warm_drive_fan_rpm("min", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="fan_max_rpm",
+            name="Max Fan Speed",
+            unique_suffix="fan_max_rpm",
+            icon="mdi:fan-plus",
+            native_min=500,
+            native_max=8000,
+            unit=REVOLUTIONS_PER_MINUTE,
+            setter=lambda value: coordinator.async_set_warm_drive_fan_rpm("max", value),
+        ),
+        WarmDriveConfigNumber(
+            coordinator,
+            key="glow_power",
+            name="Glow Plug Power",
+            unique_suffix="glow_power",
+            icon="mdi:lightning-bolt",
+            native_min=1,
+            native_max=120,
+            unit=UnitOfPower.WATT,
+            device_class=NumberDeviceClass.POWER,
+            setter=coordinator.async_set_warm_drive_glow_power,
+        ),
+    ]
+
+
+class WarmDriveConfigNumber(CoordinatorEntity[VevorHeaterCoordinator], NumberEntity):
+    """Warm Drive pamphlet 0x26 configuration number."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        coordinator: VevorHeaterCoordinator,
+        *,
+        key: str,
+        name: str,
+        unique_suffix: str,
+        icon: str,
+        native_min: float,
+        native_max: float,
+        unit: str | None = None,
+        device_class: NumberDeviceClass | None = None,
+        setter: Callable[[int], Awaitable[None]],
+    ) -> None:
+        """Initialize a Warm Drive config number."""
+        super().__init__(coordinator)
+        self._key = key
+        self._setter = setter
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{coordinator.address}_{unique_suffix}"
+        self._attr_native_min_value = native_min
+        self._attr_native_max_value = native_max
+        self._attr_native_unit_of_measurement = unit
+        if device_class is not None:
+            self._attr_device_class = device_class
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.address)},
+            "name": "Vevor Diesel Heater",
+            "manufacturer": "Vevor",
+            "model": "Diesel Heater",
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return true when Warm Drive has reported this 5C16 field."""
+        return (
+            self.coordinator.data.get("connected", False)
+            and self.coordinator.is_warm_drive_controller is True
+            and self.coordinator.data.get(self._key) is not None
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the stored 5C16 value."""
+        value = self.coordinator.data.get(self._key)
+        if value is None:
+            return None
+        return float(value)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write the pamphlet 0x26 byte for this field."""
+        await self._setter(int(round(value)))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
 
 
 class VevorHeaterLevelNumber(CoordinatorEntity[VevorHeaterCoordinator], NumberEntity):
@@ -147,6 +318,8 @@ class VevorHeaterLevelNumber(CoordinatorEntity[VevorHeaterCoordinator], NumberEn
     @property
     def native_value(self) -> float:
         """Return the current value."""
+        if self.coordinator.is_warm_drive_controller:
+            return self.coordinator.data.get("set_gear")
         return self.coordinator.data.get("set_level", MIN_LEVEL)
 
     async def async_set_native_value(self, value: float) -> None:

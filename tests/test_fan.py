@@ -138,6 +138,15 @@ class TestFanAvailability:
 
         assert fan.available is True
 
+    def test_not_available_for_dz06_neo(self):
+        coordinator = create_mock_coordinator()
+        coordinator.is_dz06_neo = True
+        coordinator.data["connected"] = True
+        coordinator.data["running_mode"] = RUNNING_MODE_LEVEL
+        fan = VevorHeaterFan(coordinator)
+
+        assert fan.available is False
+
     def test_not_available_when_not_connected(self):
         """Test fan is not available when not connected."""
         coordinator = create_mock_coordinator()
@@ -216,6 +225,13 @@ class TestFanPercentage:
         """Test percentage returns None when level is None."""
         coordinator = create_mock_coordinator()
         coordinator.data["set_level"] = None
+        fan = VevorHeaterFan(coordinator)
+
+        assert fan.percentage is None
+
+    def test_percentage_none_when_level_outside_ordered_range(self):
+        coordinator = create_mock_coordinator()
+        coordinator.data["set_level"] = 17
         fan = VevorHeaterFan(coordinator)
 
         assert fan.percentage is None

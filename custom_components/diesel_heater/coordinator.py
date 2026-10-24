@@ -82,6 +82,7 @@ from .const import (
     MIN_BURNOFF_AFTER_HOURS,
     MIN_BURNOFF_DURATION,
     MIN_HEATER_OFFSET,
+    MIN_LEVEL,
     PROTOCOL_HEADER_ABBA,
     PROTOCOL_HEADER_CBFF,
     PROTOCOL_HEADER_AA77,
@@ -172,6 +173,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._notification_data: bytearray | None = None
         self._neo_config_received = False
         self._neo_run_settings_received = False
+        self._warm_drive_board_config: bytearray | None = None
         # Get passkey from config, default to 1234 (factory default for most heaters)
         self._passkey = config_entry.data.get(CONF_PIN, DEFAULT_PIN)
         self._neo_password = config_entry.data.get(CONF_NEO_PASSWORD, DEFAULT_NEO_PASSWORD)
@@ -254,6 +256,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             "altitude": None,
             "running_mode": None,
             "set_level": None,
+            "set_gear": None,
             "set_temp": None,
             "supply_voltage": None,
             "case_temperature": None,
@@ -262,6 +265,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             "heater_offset": 0,  # Current offset sent to heater (cmd 20)
             "connected": False,
             "auto_start_stop": None,  # Automatic Start/Stop flag (byte 31)
+            "max_heat": None,  # Warm Drive 5C16 byte 13: 2 = max heat on
             "auto_offset_enabled": False,  # Auto offset adjustment enabled
             # Configuration settings (bytes 26-30)
             "language": None,  # byte 26: Voice notification language
@@ -375,17 +379,105 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         """Return whether the advertised name matches ThermoConnect Cronus."""
         return "CRONUS" in (self._ble_device.name or "")
 
+    @staticmethod
+    def _clean_ble_name(name: str | None) -> str:
+        """Normalize a BLE local name from either Bleak or HA advertisement data."""
+        return (name or "").replace("\x00", "").strip()
+
+    def _last_heater_service_info(self):
+        """Return HA's last advertisement for this heater, if bluetooth is available."""
+        hass = getattr(self, "hass", None)
+        address = getattr(self, "address", None) or getattr(
+            self._ble_device, "address", None
+        )
+        if hass is None or not address:
+            return None
+        # ESPHome proxies often cache the scan under connectable=False, and
+        # may omit the local name unless active scanning is enabled.
+        for connectable in (True, False):
+            try:
+                info = bluetooth.async_last_service_info(
+                    hass, address, connectable=connectable
+                )
+            except TypeError:
+                try:
+                    info = bluetooth.async_last_service_info(hass, address)
+                except Exception as err:  # pragma: no cover - defensive
+                    self._logger.debug("async_last_service_info failed: %s", err)
+                    return None
+            except Exception as err:  # pragma: no cover - defensive
+                self._logger.debug("async_last_service_info failed: %s", err)
+                continue
+            if info is not None:
+                return info
+        return None
+
+    def _heater_address_compact(self) -> str:
+        """Return the heater MAC with separators removed."""
+        address = getattr(self, "address", None) or getattr(
+            self._ble_device, "address", ""
+        ) or ""
+        return str(address).replace(":", "").replace("-", "").upper()
+
+    def _is_real_local_name(self, name: str) -> bool:
+        """Return False for empty names and ESPHome MAC-as-name placeholders."""
+        if not name:
+            return False
+        compact = name.replace(":", "").replace("-", "").upper()
+        address = self._heater_address_compact()
+        return not address or compact != address
+
+    def _advertised_heater_name(self) -> str:
+        """Prefer a real BLE local name, ignoring MAC placeholders."""
+        info = self._last_heater_service_info()
+        for candidate in (
+            getattr(self._ble_device, "name", None),
+            getattr(info, "name", None) if info else None,
+        ):
+            cleaned = self._clean_ble_name(candidate)
+            if self._is_real_local_name(cleaned):
+                return cleaned
+        return ""
+
+    def _warm_drive_type_from_advertisement(self) -> str | None:
+        """Return air/water from Warm Drive's 16-byte manufacturer record."""
+        info = self._last_heater_service_info()
+        manufacturer_data = getattr(info, "manufacturer_data", None) or {}
+        for payload in manufacturer_data.values():
+            if len(payload) == 16:
+                return "air" if payload[4] == 1 else "water"
+        return None
+
     @property
     def is_warm_drive_controller(self) -> bool:
         """Return whether the controller identifies itself as Warm Drive."""
         stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
         if stored in ("air", "water"):
             return True
-        return (
-            (getattr(self._ble_device, "name", None) or "")
-            .replace("\x00", "")
-            .strip()
-            == "Air Heater"
+        live = self.data.get("neo_controller_type")
+        if live in ("air", "water"):
+            return True
+        if self._advertised_heater_name() == "Air Heater":
+            return True
+        # ESPHome often delivers the 16-byte Warm Drive scan record with name=None.
+        return self._warm_drive_type_from_advertisement() in ("air", "water")
+
+    def _remember_warm_drive_identity(self) -> None:
+        """Persist Warm Drive type so later HA lookups with name=None stay on this path."""
+        if not self.is_warm_drive_controller:
+            return
+        stored = self.config_entry.data.get(CONF_NEO_CONTROLLER_TYPE)
+        if stored in ("air", "water"):
+            return
+        hass = getattr(self, "hass", None)
+        if hass is None or not hasattr(hass, "config_entries"):
+            return
+        controller_type = self.data.get("neo_controller_type")
+        if controller_type not in ("air", "water"):
+            controller_type = self._warm_drive_type_from_advertisement() or "air"
+        hass.config_entries.async_update_entry(
+            self.config_entry,
+            data={**self.config_entry.data, CONF_NEO_CONTROLLER_TYPE: controller_type},
         )
 
     @property
@@ -1282,7 +1374,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
     _VOLATILE_FIELDS = (
         "case_temperature", "cab_temperature", "cab_temperature_raw",
         "supply_voltage", "running_state", "running_step", "running_mode",
-        "set_level", "set_temp", "altitude", "error_code",
+        "set_level", "set_gear", "set_temp", "altitude", "error_code",
         "hourly_fuel_consumption", "co_ppm", "remain_run_time", "motor_speed",
         "fire_temperature", "hot_water_temperature", "water_temperature",
     )
@@ -1899,10 +1991,12 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
             if self.is_dz06_neo:
                 self._logger.info(
-                    "Split FFF0 controller name=%r warm_drive=%s",
+                    "Split FFF0 controller name=%r advertised=%r warm_drive=%s",
                     getattr(self._ble_device, "name", None),
+                    self._advertised_heater_name() or None,
                     self.is_warm_drive_controller,
                 )
+                self._remember_warm_drive_identity()
                 if not await self._send_dz06_neo_configuration():
                     self._logger.error(
                         "Split FFF0 5C16 configuration read failed. Close the phone "
@@ -1952,12 +2046,30 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 and data[1] == len(data) - 2
             ):
                 run_type = data[4] or 1
-                self.data.update(
-                    {
-                        "neo_run_type": run_type,
-                        "set_temp": float(data[5]),
-                        "altitude": int.from_bytes(data[6:8], "big"),
-                    }
+                target_byte = data[5]
+                run_settings = {
+                    "neo_run_type": run_type,
+                    "altitude": int.from_bytes(data[6:8], "big"),
+                }
+                if (
+                    self.is_warm_drive_controller
+                    and run_type == 1
+                    and MIN_LEVEL <= target_byte <= MAX_LEVEL
+                ):
+                    run_settings["set_gear"] = target_byte
+                    run_settings["running_mode"] = RUNNING_MODE_LEVEL
+                else:
+                    run_settings["set_temp"] = float(target_byte)
+                    if run_type == 2:
+                        run_settings["running_mode"] = RUNNING_MODE_TEMPERATURE
+                    elif run_type == 1:
+                        run_settings["running_mode"] = RUNNING_MODE_LEVEL
+                self.data.update(run_settings)
+                self._logger.info(
+                    "DZ06 A5 run settings run_type=%s target=%s altitude=%s",
+                    self.data.get("neo_run_type"),
+                    target_byte,
+                    self.data.get("altitude"),
                 )
                 self._neo_run_settings_received = True
             if len(data) == 24 and data[:2] == bytearray((0x5C, 0x16)):
@@ -1965,10 +2077,41 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 if minimum <= maximum:
                     self.data["neo_min_target"] = minimum
                     self.data["neo_max_target"] = maximum
-                if self.is_warm_drive_controller:
+                if data[2] in (1, 2) and (
+                    self.is_warm_drive_controller or not self._advertised_heater_name()
+                ):
                     self.data["neo_controller_type"] = (
                         "air" if data[2] == 1 else "water"
                     )
+                    self._remember_warm_drive_identity()
+                if self.is_warm_drive_controller:
+                    self._warm_drive_board_config = bytearray(data)
+                    self.data["auto_start_stop"] = data[14] == 1
+                    self.data["tank_volume"] = data[15]
+                    self.data["max_heat"] = data[13] == 2
+                    self.data["pump_type"] = data[16]
+                    self.data["oil_type"] = data[3]
+                    self.data["pump_min_hz"] = data[6]
+                    self.data["pump_max_hz"] = data[7]
+                    self.data["fan_min_rpm"] = int.from_bytes(data[8:10], "big")
+                    self.data["fan_max_rpm"] = int.from_bytes(data[10:12], "big")
+                    self.data["glow_power"] = data[12]
+                self._logger.info(
+                    "DZ06 5C16 min=%s max=%s type_byte=%s oil=%s pump_hz=%s-%s fan=%s-%s glow=%s auto_start=%s max_heat=%s pump=%s warm_drive=%s",
+                    self.data.get("neo_min_target"),
+                    self.data.get("neo_max_target"),
+                    data[2],
+                    self.data.get("oil_type"),
+                    self.data.get("pump_min_hz"),
+                    self.data.get("pump_max_hz"),
+                    self.data.get("fan_min_rpm"),
+                    self.data.get("fan_max_rpm"),
+                    self.data.get("glow_power"),
+                    self.data.get("auto_start_stop"),
+                    self.data.get("max_heat"),
+                    self.data.get("pump_type"),
+                    self.is_warm_drive_controller,
+                )
                 self._neo_config_received = True
             if len(data) >= 21 and data[0] == 0x5D:
                 if data[17] in (1, 2):
@@ -1987,7 +2130,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 water_temperature = self._dz06_neo_display_temperature(
                     int.from_bytes(data[22:24], "big", signed=True)
                 )
-                self.data.update({
+                status = {
                     "connected": True,
                     "supply_voltage": int.from_bytes(data[5:7], "big") / 10.0,
                     "error_code": (data[4] - 1) if data[4] > 1 else data[4],
@@ -1996,11 +2139,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     "fire_temperature": fire_temperature,
                     "hot_water_temperature": hot_water_temperature,
                     "water_temperature": water_temperature,
-                    "set_temp": self._dz06_neo_display_temperature(data[15]),
                     "cab_temperature": self._dz06_neo_display_temperature(data[35]),
                     "altitude": int.from_bytes(data[32:34], "big"),
                     "neo_run_type": run_type,
-                })
+                }
+                if run_type == 1:
+                    status["set_gear"] = self._warm_drive_wire_to_gear(data[15])
+                else:
+                    status["set_temp"] = self._dz06_neo_display_temperature(data[15])
+                self.data.update(status)
                 raw_state = data[3]
                 self.data["neo_raw_state"] = raw_state
                 if raw_state == 1:
@@ -2396,6 +2543,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 self._v21_handshake_authenticated = None
                 # Reset time sync flag to trigger auto-sync on next connection
                 self._time_synced_this_session = False
+                self._warm_drive_board_config = None
 
     async def _async_password_handshake(self, max_retries: int = 3) -> bool:
         """Send password handshake with retry logic (@Xev optimizations, issue #34).
@@ -2604,18 +2752,170 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         return packet
 
     @staticmethod
+    def _modbus_crc16(payload: bytes) -> bytes:
+        """Return CRC16/MODBUS as two big-endian bytes."""
+        crc = 0xFFFF
+        for value in payload:
+            crc ^= value
+            for _ in range(8):
+                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+        return crc.to_bytes(2, "big")
+
+    @staticmethod
     def _neo_packet(opcode: int, run_type: int, target: int, altitude: int) -> bytearray:
         """Build a Sunster Neo control packet with CRC16/MODBUS."""
         packet = bytearray((0xA5, 0x09, 0x01, opcode, run_type, target))
         packet.extend(altitude.to_bytes(2, "big"))
         packet.append(1)
-        crc = 0xFFFF
-        for value in packet:
-            crc ^= value
-            for _ in range(8):
-                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-        packet.extend(crc.to_bytes(2, "big"))
+        packet.extend(VevorHeaterCoordinator._modbus_crc16(packet))
         return packet
+
+    def _warm_drive_config_packet(self, overrides: dict[int, int]) -> bytearray | None:
+        """Build a pamphlet-app 0x26 write, echoing 5C16 and replacing given bytes."""
+        config = self._warm_drive_board_config
+        if config is None or len(config) < 17:
+            return None
+        body = bytearray(18)
+        body[0], body[1] = 0x26, 0x12
+        body[2:17] = config[2:17]
+        for index, value in overrides.items():
+            if not 2 <= index <= 16:
+                return None
+            body[index] = value & 0xFF
+        body[17] = 1
+        body.extend(self._modbus_crc16(body))
+        return body
+
+    def _warm_drive_auto_start_packet(self, enabled: bool) -> bytearray | None:
+        """Build the pamphlet-app 0x26 config write, echoing the last 5C16 block."""
+        return self._warm_drive_config_packet({14: 1 if enabled else 0})
+
+    async def _async_write_warm_drive_config(
+        self,
+        overrides: dict[int, int],
+        data_updates: dict[str, Any],
+        *,
+        action: str,
+    ) -> None:
+        """Echo 5C16 in a 0x26 write and keep the new bytes after the write is sent."""
+        if self._client is not None and not await self._send_dz06_neo_configuration():
+            self._logger.warning("Warm Drive %s blocked: 5C16 refresh failed", action)
+            return
+        packet = self._warm_drive_config_packet(overrides)
+        if packet is None:
+            self._logger.warning(
+                "Warm Drive %s blocked until a 5C16 config frame is stored", action
+            )
+            return
+        try:
+            await self._write_gatt(packet)
+        except Exception as err:
+            self._logger.warning("Warm Drive %s write failed: %s", action, err)
+            return
+        if self._warm_drive_board_config is not None:
+            for index, value in overrides.items():
+                self._warm_drive_board_config[index] = value & 0xFF
+        self.data.update(data_updates)
+        if self._client is not None:
+            try:
+                confirmed = await self._send_dz06_neo_configuration()
+            except Exception as err:
+                self._logger.warning(
+                    "Warm Drive %s confirm read failed: %s", action, err
+                )
+                confirmed = False
+            if not confirmed:
+                self._logger.warning(
+                    "Warm Drive %s write sent, but 5C16 confirm failed", action
+                )
+        await self.async_request_refresh()
+
+    def _warm_drive_gear_target(self) -> int:
+        """Return the last Warm Drive gear, or 5 when none is stored."""
+        try:
+            gear = int(round(float(self.data.get("set_gear"))))
+        except (TypeError, ValueError):
+            return 5
+        if MIN_LEVEL <= gear <= MAX_LEVEL:
+            return gear
+        return 5
+
+    def _neo_target_limits(self) -> tuple[int, int]:
+        """Return the 5C16 Celsius range, defaulting to 8-36."""
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            return 8, 36
+        if minimum > maximum:
+            return 8, 36
+        return minimum, maximum
+
+    def _warm_drive_gear_to_wire(self, gear: int) -> int:
+        """Map HA gear 1-10 onto the controller's 8-35 (or 5C16) range.
+
+        Live MUDIRO 5A25 confirms 0x51 run_type 1 only for targets in that
+        Celsius window. Raw 1-7 never echo; 8-10 do. The HA Level entity
+        stays 1-10.
+        """
+        try:
+            gear = int(gear)
+        except (TypeError, ValueError):
+            gear = 5
+        gear = max(MIN_LEVEL, min(MAX_LEVEL, gear))
+        minimum, maximum = self._neo_target_limits()
+        if maximum <= minimum:
+            return minimum
+        span = MAX_LEVEL - MIN_LEVEL
+        return int(round(minimum + (gear - MIN_LEVEL) * (maximum - minimum) / span))
+
+    def _warm_drive_wire_to_gear(self, target: int) -> int:
+        """Map a 0x51/5A25 level-mode target back to HA gear 1-10."""
+        try:
+            target = int(target)
+        except (TypeError, ValueError):
+            return 5
+        minimum, maximum = self._neo_target_limits()
+        if MIN_LEVEL <= target < minimum:
+            return target
+        if maximum <= minimum:
+            return MIN_LEVEL
+        ratio = (target - minimum) / (maximum - minimum)
+        return max(MIN_LEVEL, min(MAX_LEVEL, int(round(ratio * (MAX_LEVEL - MIN_LEVEL) + MIN_LEVEL))))
+
+    def _neo_temperature_command_target(self) -> int | None:
+        """Return a Celsius 0x51 target, falling back if no setpoint is stored."""
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            return None
+        if minimum > maximum:
+            return None
+        fallback = 20 if minimum <= 20 <= maximum else minimum
+        try:
+            target = int(round(float(self.data.get("set_temp"))))
+            if self._heater_uses_fahrenheit:
+                target = int(round((target - 32) * 5 / 9))
+        except (TypeError, ValueError):
+            return fallback
+        if not minimum <= target <= maximum:
+            return fallback
+        return target
+
+    def _neo_control_altitude(self, use_startup_defaults: bool = False) -> int | None:
+        altitude = self.data.get("altitude", 1) if use_startup_defaults else self.data.get("altitude")
+        try:
+            altitude = int(altitude)
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= altitude <= 0xFFFF:
+            return None
+        return altitude
 
     def _neo_control_settings(
         self, use_startup_defaults: bool = False
@@ -2634,10 +2934,17 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 return None
         try:
             run_type = int(run_type)
+            altitude = int(altitude)
+        except (TypeError, ValueError):
+            return None
+        if run_type not in (1, 2) or not 0 <= altitude <= 0xFFFF:
+            return None
+        if self.is_warm_drive_controller and run_type == 1:
+            return run_type, self._warm_drive_gear_to_wire(self._warm_drive_gear_target()), altitude
+        try:
             target = int(round(float(target)))
             if self._heater_uses_fahrenheit:
                 target = int(round((target - 32) * 5 / 9))
-            altitude = int(altitude)
         except (TypeError, ValueError):
             return None
         minimum = self.data.get("neo_min_target")
@@ -2647,13 +2954,55 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             maximum = int(maximum) if maximum is not None else 36
         except (TypeError, ValueError):
             return None
-        if (
-            run_type not in (1, 2)
-            or minimum > maximum
-            or not minimum <= target <= maximum
-            or not 0 <= altitude <= 0xFFFF
-        ):
+        if minimum > maximum or not minimum <= target <= maximum:
             return None
+        return run_type, target, altitude
+
+    def _neo_status_poll_settings(self) -> tuple[int, int, int]:
+        """Return an A5/09 envelope for status polling.
+
+        Opcode 0 is a poll, not a setpoint write. The control validator rejects
+        Warm Drive standby/ventilation run types and out-of-range A5 targets,
+        which previously skipped the 5A25 request after a successful connect.
+        """
+        settings = self._neo_control_settings(use_startup_defaults=True)
+        if settings is not None:
+            return settings
+        try:
+            run_type = int(self.data.get("neo_run_type", 1) or 1)
+        except (TypeError, ValueError):
+            run_type = 1
+        if run_type not in (1, 2):
+            run_type = 1
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            minimum, maximum = 8, 36
+        if minimum > maximum:
+            minimum, maximum = 8, 36
+        try:
+            target = int(round(float(self.data.get("set_temp", minimum))))
+            if self._heater_uses_fahrenheit:
+                target = int(round((target - 32) * 5 / 9))
+        except (TypeError, ValueError):
+            target = minimum
+        if not minimum <= target <= maximum:
+            target = minimum
+        try:
+            altitude = int(self.data.get("altitude", 1) or 1)
+        except (TypeError, ValueError):
+            altitude = 1
+        if not 0 <= altitude <= 0xFFFF:
+            altitude = 1
+        self._logger.info(
+            "DZ06 status poll using fallback settings run_type=%s target=%s altitude=%s",
+            run_type,
+            target,
+            altitude,
+        )
         return run_type, target, altitude
 
     async def _async_set_dz06_neo_control(
@@ -2667,11 +3016,13 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             maximum = int(maximum) if maximum is not None else 36
         except (TypeError, ValueError):
             return False
-        if (
-            run_type not in (1, 2)
-            or not minimum <= target <= maximum
-            or not 0 <= altitude <= 0xFFFF
-        ):
+        if self.is_warm_drive_controller and run_type == 1:
+            if MIN_LEVEL <= target <= MAX_LEVEL:
+                target = self._warm_drive_gear_to_wire(target)
+            target_ok = minimum <= target <= maximum
+        else:
+            target_ok = minimum <= target <= maximum
+        if run_type not in (1, 2) or not target_ok or not 0 <= altitude <= 0xFFFF:
             return False
         self._notification_data = None
         try:
@@ -2734,12 +3085,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             return False
         packet.extend(password.to_bytes(4, "big"))
         packet.append(1)
-        crc = 0xFFFF
-        for value in packet:
-            crc ^= value
-            for _ in range(8):
-                crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-        packet.extend(crc.to_bytes(2, "big"))
+        packet.extend(self._modbus_crc16(packet))
         self._notification_data = None
         self._neo_config_received = False
         await self._write_gatt(packet)
@@ -2847,10 +3193,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if self.is_dz06_neo:
             if command == 1:
-                settings = self._neo_control_settings(use_startup_defaults=True)
-                if settings is None:
-                    return False
-                packet = self._neo_packet(0x00, *settings)
+                packet = self._neo_packet(0x00, *self._neo_status_poll_settings())
                 self._notification_data = None
                 try:
                     await self._write_gatt(packet)
@@ -3126,8 +3469,9 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             except (KeyError, TypeError, ValueError):
                 self._logger.warning("DZ06 Neo burn-off requires a restorable status snapshot")
                 return False
-            # The app uses opcode 0x51, run type 1, at its configured upper target.
-            return await self._async_set_dz06_neo_control(1, maximum, altitude)
+            # Warm Drive pamphlet gear is 1-10. Other DZ06 still uses the °C cap.
+            burnoff_target = MAX_LEVEL if self.is_warm_drive_controller else maximum
+            return await self._async_set_dz06_neo_control(1, burnoff_target, altitude)
 
         mode_ok = True
         if self.data.get("running_mode") != RUNNING_MODE_LEVEL:
@@ -3338,6 +3682,39 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self._logger.info("Ignoring level change during burn-off")
             return False
 
+        if self.is_warm_drive_controller:
+            try:
+                level = int(level)
+            except (TypeError, ValueError):
+                return False
+            level = max(MIN_LEVEL, min(MAX_LEVEL, level))
+            settings = self._neo_control_settings()
+            altitude = (
+                settings[2]
+                if settings is not None
+                else self._neo_status_poll_settings()[2]
+            )
+            wire = self._warm_drive_gear_to_wire(level)
+            self._logger.info(
+                "Warm Drive gear write gear=%s wire=%s altitude=%s",
+                level,
+                wire,
+                altitude,
+            )
+            success = await self._async_set_dz06_neo_control(1, level, altitude)
+            if success:
+                self.data["set_gear"] = level
+                self.data["neo_run_type"] = 1
+                self.data["running_mode"] = RUNNING_MODE_LEVEL
+            return success
+
+        if self.is_dz06_neo:
+            self._logger.warning(
+                "DZ06 has no legacy gear command (cmd=4). "
+                "Use climate target temperature; that sends native 0x51."
+            )
+            return False
+
         level = max(1, min(10, level))
         if self._protocol_mode == 5:  # ABBA/HeaterCC uses level up/down button commands
             current_level_raw = self.data.get("set_level")
@@ -3473,6 +3850,16 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if not self.is_dz06_neo:
             command_temp = int(round(temperature))
         if self.is_dz06_neo:
+            altitude = self._neo_control_altitude()
+            if altitude is None:
+                settings = self._neo_control_settings()
+                if settings is None:
+                    return False
+                altitude = settings[2]
+            if self.is_warm_drive_controller:
+                return await self._async_set_dz06_neo_control(
+                    2, command_temp, altitude
+                )
             settings = self._neo_control_settings()
             if settings is None:
                 return False
@@ -3542,6 +3929,35 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 await self.async_request_refresh()
             return success
 
+        if self.is_dz06_neo:
+            if mode not in (RUNNING_MODE_LEVEL, RUNNING_MODE_TEMPERATURE):
+                self._logger.warning(
+                    "DZ06/Warm Drive only supports Level and Temperature modes"
+                )
+                return False
+            if self.is_warm_drive_controller:
+                altitude = self._neo_control_altitude()
+                if altitude is None:
+                    altitude = self._neo_status_poll_settings()[2]
+                if mode == RUNNING_MODE_LEVEL:
+                    target = self._warm_drive_gear_target()
+                    run_type = 1
+                else:
+                    target = self._neo_temperature_command_target()
+                    if target is None:
+                        return False
+                    run_type = 2
+            else:
+                _, target, altitude = self._neo_status_poll_settings()
+                run_type = 1 if mode == RUNNING_MODE_LEVEL else 2
+            self._logger.info(
+                "DZ06 native mode change run_type=%s target=%s altitude=%s",
+                run_type,
+                target,
+                altitude,
+            )
+            return await self._async_set_dz06_neo_control(run_type, target, altitude)
+
         # Standard modes (0-2)
         mode = max(0, min(2, mode))
         self._logger.info("Setting running mode to %d", mode)
@@ -3551,13 +3967,16 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         return success
 
     async def async_set_auto_start_stop(self, enabled: bool) -> None:
-        """Set Automatic Start/Stop mode (cmd 18).
+        """Set Automatic Start/Stop.
 
-        When enabled in Temperature mode, the heater will completely stop
-        when the room temperature reaches 2°C above the target, and restart
-        when it drops 2°C below the target.
+        Warm Drive uses the pamphlet-app 0x26 config write. Other protocols
+        send command 18. When enabled in Temperature mode, the heater stops
+        above the target and restarts below it.
         """
         self._logger.info("Setting Auto Start/Stop to %s", "enabled" if enabled else "disabled")
+        if self.is_warm_drive_controller:
+            await self._async_set_warm_drive_auto_start_stop(enabled)
+            return
         if (
             self._protocol_mode == 6
             and isinstance(self._protocol, ProtocolCBFF)
@@ -3570,6 +3989,19 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         success = await self._send_command(18, 1 if enabled else 0)
         if success:
             await self.async_request_refresh()
+
+    async def _async_set_warm_drive_auto_start_stop(self, enabled: bool) -> None:
+        """Toggle Warm Drive Auto Start/Stop through the pamphlet-app 0x26 write."""
+        if self.data.get("running_mode") != RUNNING_MODE_TEMPERATURE:
+            self._logger.warning(
+                "Warm Drive Auto Start/Stop is only used in Temperature mode"
+            )
+            return
+        await self._async_write_warm_drive_config(
+            {14: 1 if enabled else 0},
+            {"auto_start_stop": enabled},
+            action="Auto Start/Stop",
+        )
 
     async def async_sync_time(self) -> bool:
         """Synchronize time only through a protocol's app-backed command."""
@@ -3763,14 +4195,15 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_set_tank_volume(self, volume_index: int) -> None:
-        """Set tank volume by index (cmd 16).
+        """Set tank volume.
 
-        The heater uses index-based values, not actual liters:
-        0=None, 1=5L, 2=10L, 3=15L, 4=20L, 5=25L, 6=30L, 7=35L, 8=40L, 9=45L, 10=50L
-
-        Args:
-            volume_index: Tank volume index (0-10)
+        Warm Drive writes pamphlet oil-capacity code into 0x26 byte 15.
+        Other protocols use legacy command 16:
+        0=None, 1=5L, 2=10L, 3=15L, 4=20L, 5=25L, 6=30L, 7=35L, 8=40L, 9=45L, 10=50L.
         """
+        if self.is_warm_drive_controller:
+            await self._async_set_warm_drive_tank_volume(volume_index)
+            return
         volume_index = max(0, min(10, volume_index))
         self._logger.info("⛽ Setting tank volume to index %d (cmd 16)", volume_index)
         success = await self._send_command(16, volume_index)
@@ -3781,14 +4214,48 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         else:
             self._logger.warning("❌ Failed to set tank volume")
 
-    async def async_set_pump_type(self, pump_type: int) -> None:
-        """Set oil pump type (cmd 17).
+    async def _async_set_warm_drive_tank_volume(self, volume_index: int) -> None:
+        """Write the pamphlet oil-capacity code without touching the other config bytes."""
+        code = max(0, min(5, int(volume_index)))
+        self._logger.info(
+            "⛽ Setting Warm Drive tank volume to code %d (0x26 byte 15)", code
+        )
+        await self._async_write_warm_drive_config(
+            {15: code},
+            {"tank_volume": code},
+            action="tank volume",
+        )
 
-        Pump types: 0=16µl, 1=22µl, 2=28µl, 3=32µl
+    async def async_set_max_heat(self, enabled: bool) -> None:
+        """Set Warm Drive max heat through 0x26 byte 13.
 
-        Args:
-            pump_type: Pump type (0-3)
+        The pamphlet app selects the icon when the stored value is 2 and
+        writes 1 to turn it off.
         """
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Max Heat is only available on Warm Drive controllers")
+            return
+        value = 2 if enabled else 1
+        self._logger.info(
+            "Setting Warm Drive max heat to %s (0x26 byte 13)",
+            "on" if enabled else "off",
+        )
+        await self._async_write_warm_drive_config(
+            {13: value},
+            {"max_heat": enabled},
+            action="max heat",
+        )
+
+    async def async_set_pump_type(self, pump_type: int) -> None:
+        """Set oil pump type.
+
+        Warm Drive writes the pamphlet oil-flow code into 0x26 byte 16:
+        0=16 mL, 1=22 mL, 2=28 mL, 3=32 mL.
+        Other protocols use legacy command 17 with the same codes.
+        """
+        if self.is_warm_drive_controller is True:
+            await self._async_set_warm_drive_pump_size(pump_type)
+            return
         pump_type = max(0, min(3, pump_type))
         self._logger.info("🔧 Setting pump type to %d (cmd 17)", pump_type)
         success = await self._send_command(17, pump_type)
@@ -3798,6 +4265,139 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             await self.async_request_refresh()
         else:
             self._logger.warning("❌ Failed to set pump type")
+
+    async def _async_set_warm_drive_pump_size(self, pump_type: int) -> None:
+        """Write the pamphlet pump stroke without touching the other config bytes."""
+        code = max(0, min(3, int(pump_type)))
+        self._logger.info(
+            "Setting Warm Drive pump size to code %d (0x26 byte 16)", code
+        )
+        await self._async_write_warm_drive_config(
+            {16: code},
+            {"pump_type": code},
+            action="pump size",
+        )
+
+    def _warm_drive_u16_bytes(self, value: int) -> tuple[int, int]:
+        """Split a 0-65535 value into the two big-endian 0x26 bytes."""
+        value = max(0, min(0xFFFF, int(value)))
+        return (value >> 8) & 0xFF, value & 0xFF
+
+    def _warm_drive_int(self, key: str, default: int) -> int:
+        """Return a stored 5C16 integer, treating only None as missing."""
+        raw = self.data.get(key)
+        if raw is None:
+            return default
+        return int(raw)
+
+    async def async_set_warm_drive_oil_type(self, oil_type: int) -> None:
+        """Write pamphlet oil type into 0x26 byte 3."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Oil type is only available on Warm Drive controllers")
+            return
+        code = max(0, min(1, int(oil_type)))
+        self._logger.info("Setting Warm Drive oil type to %s (0x26 byte 3)", code)
+        await self._async_write_warm_drive_config(
+            {3: code},
+            {"oil_type": code},
+            action="oil type",
+        )
+
+    async def async_set_warm_drive_temp_limit(self, which: str, value: int) -> None:
+        """Write 5C16 min/max °C (bytes 4-5), keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Temperature limits are only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("neo_min_target", 8)
+        high = self._warm_drive_int("neo_max_target", 35)
+        value = max(0, min(80, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min temperature %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max temperature %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        self._logger.info("Setting Warm Drive temperature limits %s-%s (0x26 bytes 4-5)", low, high)
+        await self._async_write_warm_drive_config(
+            {4: low, 5: high},
+            {"neo_min_target": low, "neo_max_target": high},
+            action="temperature limits",
+        )
+
+    async def async_set_warm_drive_pump_hz(self, which: str, value: int) -> None:
+        """Write pamphlet oil-frequency bytes 6-7, keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Pump frequency is only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("pump_min_hz", 1)
+        high = self._warm_drive_int("pump_max_hz", 80)
+        value = max(1, min(80, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min pump Hz %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max pump Hz %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        self._logger.info("Setting Warm Drive pump Hz %s-%s (0x26 bytes 6-7)", low, high)
+        await self._async_write_warm_drive_config(
+            {6: low, 7: high},
+            {"pump_min_hz": low, "pump_max_hz": high},
+            action="pump frequency",
+        )
+
+    async def async_set_warm_drive_fan_rpm(self, which: str, value: int) -> None:
+        """Write pamphlet fan RPM u16 BE at bytes 8-11, keeping min <= max."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Fan RPM limits are only available on Warm Drive controllers")
+            return
+        low = self._warm_drive_int("fan_min_rpm", 1000)
+        high = self._warm_drive_int("fan_max_rpm", 6000)
+        value = max(500, min(8000, int(value)))
+        if which == "min":
+            if value > high:
+                self._logger.warning("Warm Drive min fan RPM %s is above max %s", value, high)
+                return
+            low = value
+        elif which == "max":
+            if value < low:
+                self._logger.warning("Warm Drive max fan RPM %s is below min %s", value, low)
+                return
+            high = value
+        else:
+            return
+        low_hi, low_lo = self._warm_drive_u16_bytes(low)
+        high_hi, high_lo = self._warm_drive_u16_bytes(high)
+        self._logger.info("Setting Warm Drive fan RPM %s-%s (0x26 bytes 8-11)", low, high)
+        await self._async_write_warm_drive_config(
+            {8: low_hi, 9: low_lo, 10: high_hi, 11: high_lo},
+            {"fan_min_rpm": low, "fan_max_rpm": high},
+            action="fan RPM",
+        )
+
+    async def async_set_warm_drive_glow_power(self, watts: int) -> None:
+        """Write pamphlet glow-plug power into 0x26 byte 12."""
+        if self.is_warm_drive_controller is not True:
+            self._logger.warning("Glow plug power is only available on Warm Drive controllers")
+            return
+        watts = max(1, min(120, int(watts)))
+        self._logger.info("Setting Warm Drive glow plug power to %s (0x26 byte 12)", watts)
+        await self._async_write_warm_drive_config(
+            {12: watts},
+            {"glow_power": watts},
+            action="glow power",
+        )
 
     async def async_set_backlight(self, level: int) -> None:
         """Set display backlight brightness (cmd 21).
