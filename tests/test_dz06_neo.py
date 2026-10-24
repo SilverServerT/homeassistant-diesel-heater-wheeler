@@ -1207,6 +1207,19 @@ def test_warm_drive_oil_type_1_is_diesel() -> None:
     assert WARM_DRIVE_OIL_TYPE_OPTIONS[2] == "Kerosene"
 
 
+def test_status_display_off_target_and_current() -> None:
+    coordinator = coordinator_for_layout(True)
+    coordinator.data.update(
+        {
+            "running_state": 0,
+            "running_step": 0,
+            "set_temp": 19,
+            "cab_temperature": 11,
+        }
+    )
+    assert coordinator.status_display() == "Off · Target: 19 °C · Current: 11 °C"
+
+
 @pytest.mark.asyncio
 async def test_warm_drive_temp_limits_write_0x26_bytes_4_and_5() -> None:
     coordinator = coordinator_for_layout(True)

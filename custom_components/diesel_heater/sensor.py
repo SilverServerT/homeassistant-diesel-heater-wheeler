@@ -50,6 +50,7 @@ async def async_setup_entry(
 
     # Telemetry shared by the established protocols and ThermoConnect.
     entities: list[VevorSensorBase] = [
+        VevorStatusSensor(coordinator),
         VevorCabTemperatureSensor(coordinator),
         VevorSupplyVoltageSensor(coordinator),
         VevorProtocolSensor(coordinator),
@@ -195,6 +196,26 @@ class VevorSensorBase(CoordinatorEntity[VevorHeaterCoordinator], SensorEntity):
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
+
+
+class VevorStatusSensor(VevorSensorBase):
+    """Glance line with Off/Heating, target, and current temperature."""
+
+    def __init__(self, coordinator: VevorHeaterCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, "status", "Status")
+
+    @property
+    def icon(self) -> str:
+        """Match the climate radiator icons."""
+        if self.coordinator.data.get("running_state") == 1:
+            return "mdi:radiator"
+        return "mdi:radiator-off"
+
+    @property
+    def native_value(self) -> str:
+        """Return Off/Heating plus labeled target and current temperatures."""
+        return self.coordinator.status_display()
 
 
 class VevorCaseTemperatureSensor(VevorSensorBase):

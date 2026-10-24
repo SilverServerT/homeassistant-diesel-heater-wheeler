@@ -169,6 +169,18 @@ class VevorHeaterClimate(
         return self._attr_preset_modes
 
     @property
+    def icon(self) -> str:
+        """Show a radiator when heating, off icon when the heater is off."""
+        if self.hvac_mode == HVACMode.HEAT:
+            return "mdi:radiator"
+        return "mdi:radiator-off"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose a labeled Off/Target/Current line for dashboards."""
+        return {"status": self.coordinator.status_display()}
+
+    @property
     def current_temperature(self) -> float | None:
         """Return the current temperature (interior/cabin temperature)."""
         return self.coordinator.data.get("cab_temperature")

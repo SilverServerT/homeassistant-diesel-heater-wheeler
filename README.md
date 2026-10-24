@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5.1` is `v2.1.5` with Oil Type labels matching the LCD: `1` diesel, `2` kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5.2` adds a Status sensor (`Off · Target: 19 °C · Current: 11 °C`) so Off, setpoint, and cabin temp are labeled. Oil type stays diesel/kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -705,6 +705,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.41` | `ea9c0e2` | Oil type `1` diesel, `2` gasoline (not kerosene) |
 | `v2.1.5` | `b88a6fc` | Stable cut of beta.41 |
 | `v2.1.5.1` | `d5bfbd4` | Oil type `1` diesel, `2` kerosene (LCD names) |
+| `v2.1.5.2` | | Status sensor: Off/Heating, target, and current |
 
 ### What stayed the same
 
@@ -765,7 +766,10 @@ Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat r
 
 ## Changelog
 
-### Version 2.1.5.1 (Latest)
+### Version 2.1.5.2 (Latest)
+- **Status** sensor on the device: `Off · Target: 19 °C · Current: 11 °C` (Heating when on). Climate `status` attribute matches. HA’s climate header is still `Off 19 °C`.
+
+### Version 2.1.5.1
 - Oil Type labels match the MUDIRO LCD: `1` diesel, `2` kerosene (wire codes unchanged from 2.1.5)
 
 ### Version 2.1.5

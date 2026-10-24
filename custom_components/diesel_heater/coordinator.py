@@ -92,7 +92,9 @@ from .const import (
     RUNNING_STATE_OFF,
     RUNNING_STATE_ON,
     RUNNING_STEP_COOLDOWN,
+    RUNNING_STEP_IGNITION,
     RUNNING_STEP_RUNNING,
+    RUNNING_STEP_SELF_TEST,
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_VENTILATION,
     SENSOR_TEMP_MAX,
@@ -374,6 +376,45 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 return "CBFF V2.1 (Encrypted)"
 
         return base_name
+
+    def status_display(self) -> str:
+        """Return a glance line: Off/Heating, then target, then current temp."""
+        running_state = self.data.get("running_state", 0)
+        running_step = self.data.get("running_step")
+        if running_state != RUNNING_STATE_ON:
+            power = "Off"
+        elif running_step in (
+            RUNNING_STEP_SELF_TEST,
+            RUNNING_STEP_IGNITION,
+            RUNNING_STEP_RUNNING,
+        ):
+            power = "Heating"
+        elif running_step == RUNNING_STEP_COOLDOWN:
+            power = "Cooldown"
+        elif running_step == RUNNING_STEP_VENTILATION:
+            power = "Fan"
+        elif running_step == RUNNING_STEP_STANDBY:
+            power = "Idle"
+        else:
+            power = "On"
+
+        unit = "°F" if getattr(self, "_heater_uses_fahrenheit", False) else "°C"
+        parts = [power]
+        target = self._format_status_temp(self.data.get("set_temp"))
+        if target is not None:
+            parts.append(f"Target: {target} {unit}")
+        current = self._format_status_temp(self.data.get("cab_temperature"))
+        if current is not None:
+            parts.append(f"Current: {current} {unit}")
+        return " · ".join(parts)
+
+    @staticmethod
+    def _format_status_temp(value: object) -> str | None:
+        if not isinstance(value, (int, float)):
+            return None
+        if float(value).is_integer():
+            return str(int(value))
+        return str(value)
 
     @property
     def is_cronus_device(self) -> bool:

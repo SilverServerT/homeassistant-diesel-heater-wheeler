@@ -41,6 +41,7 @@ from custom_components.diesel_heater.sensor import (
     VevorBurnoffHoursSensor,
     VevorCronusAirPressureSensor,
     VevorCronusModeSensor,
+    VevorStatusSensor,
     async_setup_entry,
 )
 from custom_components.diesel_heater.const import (
@@ -62,6 +63,7 @@ def create_mock_coordinator(protocol_mode: int = 0) -> MagicMock:
     coordinator.has_cronus_fuel_estimate = False
     coordinator.is_dz06_neo = False
     coordinator.is_warm_drive_controller = False
+    coordinator.status_display.return_value = "Heating · Target: 22 °C · Current: 20.5 °C"
     coordinator.data = {
         "connected": True,
         "running_state": 1,
@@ -181,6 +183,21 @@ class TestSupplyVoltageSensor:
 # ---------------------------------------------------------------------------
 # Running state sensor tests
 # ---------------------------------------------------------------------------
+
+class TestStatusSensor:
+    """Tests for the Off / Target / Current status sensor."""
+
+    def test_native_value_uses_coordinator_status_display(self):
+        coordinator = create_mock_coordinator()
+        coordinator.data["running_state"] = 0
+        coordinator.status_display.return_value = (
+            "Off · Target: 19 °C · Current: 11 °C"
+        )
+        sensor = VevorStatusSensor(coordinator)
+
+        assert sensor.native_value == "Off · Target: 19 °C · Current: 11 °C"
+        assert sensor.icon == "mdi:radiator-off"
+
 
 class TestRunningStepSensor:
     """Tests for running step sensor."""
@@ -425,8 +442,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         call_args = async_add_entities.call_args[0][0]
-        # Mode 1 creates only core sensors (21 core + altitude = 22)
-        assert len(call_args) == 22
+        # Mode 1 creates only core sensors (22 core + altitude = 23)
+        assert len(call_args) == 23
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_adds_warm_drive_motor_speed(self):
@@ -499,8 +516,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         call_args = async_add_entities.call_args[0][0]
-        # Mode 0 creates all sensors (21 core + altitude + 3 extended + 5 CBFF = 30)
-        assert len(call_args) == 30
+        # Mode 0 creates all sensors (22 core + altitude + 3 extended + 5 CBFF = 31)
+        assert len(call_args) == 31
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_protocol_mode_2(self):
@@ -516,8 +533,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         call_args = async_add_entities.call_args[0][0]
-        # Mode 2 creates core + extended (21 + altitude + 3 = 25)
-        assert len(call_args) == 25
+        # Mode 2 creates core + extended (22 + altitude + 3 = 26)
+        assert len(call_args) == 26
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_protocol_mode_6(self):
@@ -533,8 +550,8 @@ class TestAsyncSetupEntry:
 
         async_add_entities.assert_called_once()
         call_args = async_add_entities.call_args[0][0]
-        # Mode 6 creates all sensors (21 core + altitude + 3 extended + 5 CBFF = 30)
-        assert len(call_args) == 30
+        # Mode 6 creates all sensors (22 core + altitude + 3 extended + 5 CBFF = 31)
+        assert len(call_args) == 31
 
 
 # ---------------------------------------------------------------------------

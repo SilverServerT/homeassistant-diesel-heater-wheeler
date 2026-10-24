@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, AsyncMock
 # Import stubs first
 from . import conftest  # noqa: F401
 
-from custom_components.diesel_heater.climate import VevorHeaterClimate, async_setup_entry
+from custom_components.diesel_heater.climate import (
+    HVACMode,
+    VevorHeaterClimate,
+    async_setup_entry,
+)
 
 
 def create_mock_coordinator() -> MagicMock:
@@ -25,6 +29,7 @@ def create_mock_coordinator() -> MagicMock:
     coordinator.async_turn_on = AsyncMock()
     coordinator.async_turn_off = AsyncMock()
     coordinator.burnoff_active = False
+    coordinator.status_display.return_value = "Heating · Target: 22 °C · Current: 20.5 °C"
     coordinator.data = {
         "connected": True,
         "running_state": 1,
@@ -78,6 +83,24 @@ class TestVevorHeaterClimate:
         climate = VevorHeaterClimate(coordinator, config_entry)
 
         assert climate.current_temperature is None
+
+    def test_status_attribute_when_off(self):
+        """Climate exposes a labeled Off / Target / Current line."""
+        coordinator = create_mock_coordinator()
+        coordinator.data["running_state"] = 0
+        coordinator.data["set_temp"] = 19
+        coordinator.data["cab_temperature"] = 11
+        coordinator.status_display.return_value = (
+            "Off · Target: 19 °C · Current: 11 °C"
+        )
+        config_entry = create_mock_config_entry()
+        climate = VevorHeaterClimate(coordinator, config_entry)
+
+        assert climate.hvac_mode == HVACMode.OFF
+        assert climate.icon == "mdi:radiator-off"
+        assert climate.extra_state_attributes["status"] == (
+            "Off · Target: 19 °C · Current: 11 °C"
+        )
 
     def test_target_temperature(self):
         """Test target_temperature returns set_temp."""
