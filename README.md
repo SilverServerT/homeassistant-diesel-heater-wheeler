@@ -702,6 +702,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.34` | `3b2d8b1` | Oil type, heat limits, oil Hz, fan RPM, and glow on `0x26` |
 | `v2.1.5-beta.35` | `9bec65e` | Ventilation `0xAB` and cleaning `0xA1` while off |
 | `v2.1.5-beta.36` | `8d7ba1f` | Poll after vent/clean; off first from standby 160 |
+| `v2.1.5-beta.37` | `1e18126` | Keep vent/clean in HA when `5A25` raw state stays 0 |
 
 ### What stayed the same
 
