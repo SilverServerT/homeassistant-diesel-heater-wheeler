@@ -64,7 +64,7 @@ async def async_setup_entry(
             VevorBurnoffAfterCyclesNumber(coordinator),
             VevorBurnoffAfterHoursNumber(coordinator),
         ]
-        if not coordinator.is_dz06_neo:
+        if not coordinator.is_dz06_neo or coordinator.is_warm_drive_controller:
             entities.insert(0, VevorHeaterLevelNumber(coordinator))
 
         # Offset number (encrypted + CBFF protocols only)
@@ -148,6 +148,8 @@ class VevorHeaterLevelNumber(CoordinatorEntity[VevorHeaterCoordinator], NumberEn
     @property
     def native_value(self) -> float:
         """Return the current value."""
+        if self.coordinator.is_warm_drive_controller:
+            return self.coordinator.data.get("set_gear")
         return self.coordinator.data.get("set_level", MIN_LEVEL)
 
     async def async_set_native_value(self, value: float) -> None:

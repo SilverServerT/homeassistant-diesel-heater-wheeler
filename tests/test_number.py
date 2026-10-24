@@ -45,6 +45,7 @@ def create_mock_coordinator(protocol_mode: int = 0) -> MagicMock:
     coordinator.burnoff_active = False
     coordinator.protocol_mode = protocol_mode
     coordinator.is_dz06_neo = False
+    coordinator.is_warm_drive_controller = False
     coordinator._heater_uses_fahrenheit = False
     coordinator.has_cronus_fuel_estimate = False
     coordinator.data = {
@@ -363,6 +364,30 @@ class TestAsyncSetupEntry:
 
         entities = async_add_entities.call_args[0][0]
         assert not any(isinstance(entity, VevorHeaterLevelNumber) for entity in entities)
+
+    @pytest.mark.asyncio
+    async def test_warm_drive_creates_level_number(self):
+        coordinator = create_mock_coordinator()
+        coordinator.is_dz06_neo = True
+        coordinator.is_warm_drive_controller = True
+        async_add_entities = MagicMock()
+
+        await async_setup_entry(
+            MagicMock(), MagicMock(runtime_data=coordinator), async_add_entities
+        )
+
+        entities = async_add_entities.call_args[0][0]
+        assert any(isinstance(entity, VevorHeaterLevelNumber) for entity in entities)
+
+    def test_warm_drive_native_value_uses_set_gear(self):
+        coordinator = create_mock_coordinator()
+        coordinator.is_dz06_neo = True
+        coordinator.is_warm_drive_controller = True
+        coordinator.data["set_level"] = 16
+        coordinator.data["set_gear"] = 4
+        number = VevorHeaterLevelNumber(coordinator)
+
+        assert number.native_value == 4
 
 
 # ---------------------------------------------------------------------------

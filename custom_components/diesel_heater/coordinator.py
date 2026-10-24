@@ -82,6 +82,7 @@ from .const import (
     MIN_BURNOFF_AFTER_HOURS,
     MIN_BURNOFF_DURATION,
     MIN_HEATER_OFFSET,
+    MIN_LEVEL,
     PROTOCOL_HEADER_ABBA,
     PROTOCOL_HEADER_CBFF,
     PROTOCOL_HEADER_AA77,
@@ -255,6 +256,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             "altitude": None,
             "running_mode": None,
             "set_level": None,
+            "set_gear": None,
             "set_temp": None,
             "supply_voltage": None,
             "case_temperature": None,
@@ -1372,7 +1374,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
     _VOLATILE_FIELDS = (
         "case_temperature", "cab_temperature", "cab_temperature_raw",
         "supply_voltage", "running_state", "running_step", "running_mode",
-        "set_level", "set_temp", "altitude", "error_code",
+        "set_level", "set_gear", "set_temp", "altitude", "error_code",
         "hourly_fuel_consumption", "co_ppm", "remain_run_time", "motor_speed",
         "fire_temperature", "hot_water_temperature", "water_temperature",
     )
@@ -2044,17 +2046,29 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 and data[1] == len(data) - 2
             ):
                 run_type = data[4] or 1
-                self.data.update(
-                    {
-                        "neo_run_type": run_type,
-                        "set_temp": float(data[5]),
-                        "altitude": int.from_bytes(data[6:8], "big"),
-                    }
-                )
+                target_byte = data[5]
+                run_settings = {
+                    "neo_run_type": run_type,
+                    "altitude": int.from_bytes(data[6:8], "big"),
+                }
+                if (
+                    self.is_warm_drive_controller
+                    and run_type == 1
+                    and MIN_LEVEL <= target_byte <= MAX_LEVEL
+                ):
+                    run_settings["set_gear"] = target_byte
+                    run_settings["running_mode"] = RUNNING_MODE_LEVEL
+                else:
+                    run_settings["set_temp"] = float(target_byte)
+                    if run_type == 2:
+                        run_settings["running_mode"] = RUNNING_MODE_TEMPERATURE
+                    elif run_type == 1:
+                        run_settings["running_mode"] = RUNNING_MODE_LEVEL
+                self.data.update(run_settings)
                 self._logger.info(
                     "DZ06 A5 run settings run_type=%s target=%s altitude=%s",
                     self.data.get("neo_run_type"),
-                    self.data.get("set_temp"),
+                    target_byte,
                     self.data.get("altitude"),
                 )
                 self._neo_run_settings_received = True
@@ -2104,7 +2118,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 water_temperature = self._dz06_neo_display_temperature(
                     int.from_bytes(data[22:24], "big", signed=True)
                 )
-                self.data.update({
+                status = {
                     "connected": True,
                     "supply_voltage": int.from_bytes(data[5:7], "big") / 10.0,
                     "error_code": (data[4] - 1) if data[4] > 1 else data[4],
@@ -2113,11 +2127,18 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     "fire_temperature": fire_temperature,
                     "hot_water_temperature": hot_water_temperature,
                     "water_temperature": water_temperature,
-                    "set_temp": self._dz06_neo_display_temperature(data[15]),
                     "cab_temperature": self._dz06_neo_display_temperature(data[35]),
                     "altitude": int.from_bytes(data[32:34], "big"),
                     "neo_run_type": run_type,
-                })
+                }
+                if (
+                    run_type == 1
+                    and MIN_LEVEL <= data[15] <= MAX_LEVEL
+                ):
+                    status["set_gear"] = data[15]
+                else:
+                    status["set_temp"] = self._dz06_neo_display_temperature(data[15])
+                self.data.update(status)
                 raw_state = data[3]
                 self.data["neo_raw_state"] = raw_state
                 if raw_state == 1:
@@ -2800,6 +2821,48 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 )
         await self.async_request_refresh()
 
+    def _warm_drive_gear_target(self) -> int:
+        """Return the last Warm Drive gear, or 5 when none is stored."""
+        try:
+            gear = int(round(float(self.data.get("set_gear"))))
+        except (TypeError, ValueError):
+            return 5
+        if MIN_LEVEL <= gear <= MAX_LEVEL:
+            return gear
+        return 5
+
+    def _neo_temperature_command_target(self) -> int | None:
+        """Return a Celsius 0x51 target, falling back if no setpoint is stored."""
+        minimum = self.data.get("neo_min_target")
+        maximum = self.data.get("neo_max_target")
+        try:
+            minimum = int(minimum) if minimum is not None else 8
+            maximum = int(maximum) if maximum is not None else 36
+        except (TypeError, ValueError):
+            return None
+        if minimum > maximum:
+            return None
+        fallback = 20 if minimum <= 20 <= maximum else minimum
+        try:
+            target = int(round(float(self.data.get("set_temp"))))
+            if self._heater_uses_fahrenheit:
+                target = int(round((target - 32) * 5 / 9))
+        except (TypeError, ValueError):
+            return fallback
+        if not minimum <= target <= maximum:
+            return fallback
+        return target
+
+    def _neo_control_altitude(self, use_startup_defaults: bool = False) -> int | None:
+        altitude = self.data.get("altitude", 1) if use_startup_defaults else self.data.get("altitude")
+        try:
+            altitude = int(altitude)
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= altitude <= 0xFFFF:
+            return None
+        return altitude
+
     def _neo_control_settings(
         self, use_startup_defaults: bool = False
     ) -> tuple[int, int, int] | None:
@@ -2817,10 +2880,17 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 return None
         try:
             run_type = int(run_type)
+            altitude = int(altitude)
+        except (TypeError, ValueError):
+            return None
+        if run_type not in (1, 2) or not 0 <= altitude <= 0xFFFF:
+            return None
+        if self.is_warm_drive_controller and run_type == 1:
+            return run_type, self._warm_drive_gear_target(), altitude
+        try:
             target = int(round(float(target)))
             if self._heater_uses_fahrenheit:
                 target = int(round((target - 32) * 5 / 9))
-            altitude = int(altitude)
         except (TypeError, ValueError):
             return None
         minimum = self.data.get("neo_min_target")
@@ -2830,12 +2900,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             maximum = int(maximum) if maximum is not None else 36
         except (TypeError, ValueError):
             return None
-        if (
-            run_type not in (1, 2)
-            or minimum > maximum
-            or not minimum <= target <= maximum
-            or not 0 <= altitude <= 0xFFFF
-        ):
+        if minimum > maximum or not minimum <= target <= maximum:
             return None
         return run_type, target, altitude
 
@@ -2897,11 +2962,11 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             maximum = int(maximum) if maximum is not None else 36
         except (TypeError, ValueError):
             return False
-        if (
-            run_type not in (1, 2)
-            or not minimum <= target <= maximum
-            or not 0 <= altitude <= 0xFFFF
-        ):
+        if self.is_warm_drive_controller and run_type == 1:
+            target_ok = MIN_LEVEL <= target <= MAX_LEVEL
+        else:
+            target_ok = minimum <= target <= maximum
+        if run_type not in (1, 2) or not target_ok or not 0 <= altitude <= 0xFFFF:
             return False
         self._notification_data = None
         try:
@@ -3348,8 +3413,9 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             except (KeyError, TypeError, ValueError):
                 self._logger.warning("DZ06 Neo burn-off requires a restorable status snapshot")
                 return False
-            # The app uses opcode 0x51, run type 1, at its configured upper target.
-            return await self._async_set_dz06_neo_control(1, maximum, altitude)
+            # Warm Drive pamphlet gear is 1-10. Other DZ06 still uses the °C cap.
+            burnoff_target = MAX_LEVEL if self.is_warm_drive_controller else maximum
+            return await self._async_set_dz06_neo_control(1, burnoff_target, altitude)
 
         mode_ok = True
         if self.data.get("running_mode") != RUNNING_MODE_LEVEL:
@@ -3560,9 +3626,33 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self._logger.info("Ignoring level change during burn-off")
             return False
 
+        if self.is_warm_drive_controller:
+            try:
+                level = int(level)
+            except (TypeError, ValueError):
+                return False
+            level = max(MIN_LEVEL, min(MAX_LEVEL, level))
+            settings = self._neo_control_settings()
+            altitude = (
+                settings[2]
+                if settings is not None
+                else self._neo_status_poll_settings()[2]
+            )
+            self._logger.info(
+                "Warm Drive gear write run_type=1 target=%s altitude=%s",
+                level,
+                altitude,
+            )
+            success = await self._async_set_dz06_neo_control(1, level, altitude)
+            if success:
+                self.data["set_gear"] = level
+                self.data["neo_run_type"] = 1
+                self.data["running_mode"] = RUNNING_MODE_LEVEL
+            return success
+
         if self.is_dz06_neo:
             self._logger.warning(
-                "DZ06/Warm Drive has no legacy gear command (cmd=4). "
+                "DZ06 has no legacy gear command (cmd=4). "
                 "Use climate target temperature; that sends native 0x51."
             )
             return False
@@ -3702,6 +3792,16 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if not self.is_dz06_neo:
             command_temp = int(round(temperature))
         if self.is_dz06_neo:
+            altitude = self._neo_control_altitude()
+            if altitude is None:
+                settings = self._neo_control_settings()
+                if settings is None:
+                    return False
+                altitude = settings[2]
+            if self.is_warm_drive_controller:
+                return await self._async_set_dz06_neo_control(
+                    2, command_temp, altitude
+                )
             settings = self._neo_control_settings()
             if settings is None:
                 return False
@@ -3777,8 +3877,21 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                     "DZ06/Warm Drive only supports Level and Temperature modes"
                 )
                 return False
-            _, target, altitude = self._neo_status_poll_settings()
-            run_type = 1 if mode == RUNNING_MODE_LEVEL else 2
+            if self.is_warm_drive_controller:
+                altitude = self._neo_control_altitude()
+                if altitude is None:
+                    altitude = self._neo_status_poll_settings()[2]
+                if mode == RUNNING_MODE_LEVEL:
+                    target = self._warm_drive_gear_target()
+                    run_type = 1
+                else:
+                    target = self._neo_temperature_command_target()
+                    if target is None:
+                        return False
+                    run_type = 2
+            else:
+                _, target, altitude = self._neo_status_poll_settings()
+                run_type = 1 if mode == RUNNING_MODE_LEVEL else 2
             self._logger.info(
                 "DZ06 native mode change run_type=%s target=%s altitude=%s",
                 run_type,
