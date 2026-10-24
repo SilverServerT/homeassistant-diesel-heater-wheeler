@@ -34,6 +34,7 @@ from .const import (
     RUNNING_STEP_SELF_TEST,
     RUNNING_STEP_IGNITION,
     RUNNING_STEP_RUNNING,
+    RUNNING_STEP_CLEANING,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_VENTILATION,
 )
@@ -224,8 +225,12 @@ class VevorHeaterClimate(
             return HVACAction.OFF
         elif running_step in (RUNNING_STEP_SELF_TEST, RUNNING_STEP_IGNITION, RUNNING_STEP_RUNNING):
             return HVACAction.HEATING
-        elif running_step in (RUNNING_STEP_COOLDOWN, RUNNING_STEP_VENTILATION):
-            # Cooldown and Ventilation both run fans at full speed
+        elif running_step in (
+            RUNNING_STEP_COOLDOWN,
+            RUNNING_STEP_VENTILATION,
+            RUNNING_STEP_CLEANING,
+        ):
+            # Cooldown, ventilation, and cleaning run the fan without heating
             return HVACAction.FAN
         else:
             # Unknown step, return idle as safe default

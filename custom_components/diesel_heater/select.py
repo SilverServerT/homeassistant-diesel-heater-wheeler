@@ -18,10 +18,12 @@ from .const import (
     LANGUAGE_OPTIONS,
     PUMP_TYPE_OPTIONS,
     WARM_DRIVE_PUMP_SIZE_OPTIONS,
+    RUNNING_MODE_CLEANING,
     RUNNING_MODE_LEVEL,
     RUNNING_MODE_TEMPERATURE,
     RUNNING_MODE_VENTILATION,
     RUNNING_MODE_NAMES,
+    RUNNING_STEP_CLEANING,
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_VENTILATION,
     TANK_VOLUME_OPTIONS,
@@ -153,19 +155,26 @@ class VevorHeaterModeSelect(SelectEntity):
     def options(self) -> list[str]:
         """Return available running mode options.
 
-        For ABBA devices, include Ventilation when heater is in standby or ventilating.
-        This follows Xev's suggestion in Issue #30 for dynamic options.
+        For ABBA and Warm Drive, include Ventilation when the heater is off
+        or already ventilating. Warm Drive also offers Cleaning while off.
         """
         base_options = [
             RUNNING_MODE_NAMES[RUNNING_MODE_LEVEL],
             RUNNING_MODE_NAMES[RUNNING_MODE_TEMPERATURE],
         ]
 
-        # Add Ventilation option for ABBA devices when in standby or already ventilating
-        if self.coordinator.protocol_mode == 5:  # ABBA protocol
-            running_step = self.coordinator.data.get("running_step")
-            if running_step in (RUNNING_STEP_STANDBY, RUNNING_STEP_VENTILATION):
-                base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
+        running_step = self.coordinator.data.get("running_step")
+        warm_drive = self.coordinator.is_warm_drive_controller is True
+        if (self.coordinator.protocol_mode == 5 or warm_drive) and running_step in (
+            RUNNING_STEP_STANDBY,
+            RUNNING_STEP_VENTILATION,
+        ):
+            base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION])
+        if warm_drive and running_step in (
+            RUNNING_STEP_STANDBY,
+            RUNNING_STEP_CLEANING,
+        ):
+            base_options.append(RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING])
 
         return base_options
 
@@ -183,10 +192,11 @@ class VevorHeaterModeSelect(SelectEntity):
     @property
     def current_option(self) -> str | None:
         """Return the current running mode."""
-        # Check if currently ventilating (ABBA specific)
         running_step = self.coordinator.data.get("running_step")
         if running_step == RUNNING_STEP_VENTILATION:
             return RUNNING_MODE_NAMES[RUNNING_MODE_VENTILATION]
+        if running_step == RUNNING_STEP_CLEANING:
+            return RUNNING_MODE_NAMES[RUNNING_MODE_CLEANING]
 
         mode = self.coordinator.data.get("running_mode")
         if mode is not None:

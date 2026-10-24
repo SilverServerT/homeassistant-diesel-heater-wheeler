@@ -18,12 +18,14 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BURNOFF_NEAR_COMPLETE_REMAINING_RATIO,
     MAX_BURNOFF_IN_RUN_ABORTS,
+    RUNNING_MODE_CLEANING,
     RUNNING_MODE_VENTILATION,
     RUNNING_STATE_OFF,
     RUNNING_STATE_ON,
     RUNNING_STEP_COOLDOWN,
     RUNNING_STEP_IGNITION,
     RUNNING_STEP_RUNNING,
+    RUNNING_STEP_CLEANING,
     RUNNING_STEP_SELF_TEST,
     RUNNING_STEP_STANDBY,
     RUNNING_STEP_VENTILATION,
@@ -230,7 +232,10 @@ class BurnoffController:
         return (
             data.get("running_state") == RUNNING_STATE_ON
             and data.get("running_step") in BURNOFF_HEAT_STEPS
-            and data.get("running_mode") != RUNNING_MODE_VENTILATION
+            and data.get("running_mode") not in (
+                RUNNING_MODE_VENTILATION,
+                RUNNING_MODE_CLEANING,
+            )
         )
 
     def nearly_complete(self) -> bool:
@@ -266,7 +271,10 @@ class BurnoffController:
         # Don't count the Level 10 interval itself as new soot.
         if self.active or elapsed_seconds <= 0:
             return
-        if self._host.data.get("running_mode") == RUNNING_MODE_VENTILATION:
+        if self._host.data.get("running_mode") in (
+            RUNNING_MODE_VENTILATION,
+            RUNNING_MODE_CLEANING,
+        ):
             return
         tick = min(elapsed_seconds, self.hour_tick_cap())
         if tick <= 0:
@@ -303,8 +311,8 @@ class BurnoffController:
             and prev_step in BURNOFF_HEAT_STEPS
             and new_step not in BURNOFF_HEAT_STEPS
             and new_state == RUNNING_STATE_ON
-            and prev_mode != RUNNING_MODE_VENTILATION
-            and new_mode != RUNNING_MODE_VENTILATION
+            and prev_mode not in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
+            and new_mode not in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
             and new_step in (RUNNING_STEP_STANDBY, RUNNING_STEP_COOLDOWN)
         ):
             acc.cycles += 1
@@ -328,8 +336,11 @@ class BurnoffController:
             elif (
                 not self.ha_power_off
                 and not acc.just_completed
-                and prev_mode != RUNNING_MODE_VENTILATION
-                and (prev_step in BURNOFF_HEAT_STEPS or prev_step == RUNNING_STEP_COOLDOWN)
+                and prev_mode not in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
+                and (
+                    prev_step in BURNOFF_HEAT_STEPS
+                    or prev_step == RUNNING_STEP_COOLDOWN
+                )
                 and not acc.pending
             ):
                 acc.pending = True
@@ -356,7 +367,10 @@ class BurnoffController:
             return
         if self._host.burnoff_duration_minutes < 1:
             return
-        if self._host.data.get("running_mode") == RUNNING_MODE_VENTILATION:
+        if self._host.data.get("running_mode") in (
+            RUNNING_MODE_VENTILATION,
+            RUNNING_MODE_CLEANING,
+        ):
             return
         if not self.should_run_in_cycle():
             return
@@ -487,7 +501,10 @@ class BurnoffController:
         data = self._host.data
         if data.get("running_state") != RUNNING_STATE_ON:
             return False
-        if data.get("running_mode") == RUNNING_MODE_VENTILATION:
+        if data.get("running_mode") in (
+            RUNNING_MODE_VENTILATION,
+            RUNNING_MODE_CLEANING,
+        ):
             return False
         # Only start while actually heating. ON+STANDBY is Auto Start/Stop idle
         # and must not re-ignite at Level 10.
@@ -792,10 +809,14 @@ class BurnoffController:
             # CBFF reports ventilation as running_mode 3. ABBA reports it as
             # running_step 6 and leaves running_mode as Level or Temperature.
             if (
-                self._host.data.get("running_mode") == RUNNING_MODE_VENTILATION
-                or self._host.data.get("running_step") == RUNNING_STEP_VENTILATION
+                self._host.data.get("running_mode")
+                in (RUNNING_MODE_VENTILATION, RUNNING_MODE_CLEANING)
+                or self._host.data.get("running_step")
+                in (RUNNING_STEP_VENTILATION, RUNNING_STEP_CLEANING)
             ):
-                self._host._logger.warning("Cannot start burn-off while ventilating")
+                self._host._logger.warning(
+                    "Cannot start burn-off while ventilating or cleaning"
+                )
                 return
 
             if self._host.data.get("running_step") not in BURNOFF_HEAT_STEPS:

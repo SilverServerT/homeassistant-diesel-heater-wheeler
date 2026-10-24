@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5-beta.34` is beta.25 plus pamphlet-app `0x26` board settings and Warm Drive gear 1–10 mapped onto the controller’s 8–35 window. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
+`v2.1.5-beta.35` is beta.34 plus Warm Drive ventilation (`0xAB`) and cleaning (`0xA1`) while the heater is off. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
 | --- | --- | --- |
@@ -756,7 +756,7 @@ On `C8:17:F5:28:E7:9D` with beta.30, the 23:24 session completed `5C16` (8–35�
 
 Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same logged fields.
 
-Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
+Ventilation is opcode `0xAB` and cleaning is opcode `0xA1`, both only while the heater is off (or already in that mode). The Running Mode select shows them on Warm Drive in standby. Status `5A25` maps state `171` to Ventilation and `170` to Cleaning. The weekly timer is still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
 
