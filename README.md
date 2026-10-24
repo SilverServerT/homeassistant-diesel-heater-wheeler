@@ -703,7 +703,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.35`–`.39` | | Warm Drive vent/clean (withdrawn; not on this LCD) |
 | `v2.1.5-beta.40` | `5c9e64f` | Same as beta.34; Warm Drive vent/clean removed |
 | `v2.1.5-beta.41` | `ea9c0e2` | Oil type `1` diesel, `2` gasoline (not kerosene) |
-| `v2.1.5` | | Stable cut of beta.41 |
+| `v2.1.5` | `b88a6fc` | Stable cut of beta.41 |
 
 ### What stayed the same
 
