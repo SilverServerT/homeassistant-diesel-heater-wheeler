@@ -704,7 +704,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5-beta.36` | `8d7ba1f` | Poll after vent/clean; off first from standby 160 |
 | `v2.1.5-beta.37` | `1e18126` | Keep vent/clean in HA when `5A25` raw state stays 0 |
 | `v2.1.5-beta.38` | `c641e06` | Skip opcode-0 polls while vent/clean is held; keep both options visible |
-| `v2.1.5-beta.39` | | Hide vent/clean until this heater reports `5A25` 170/171 |
+| `v2.1.5-beta.39` | `b7def68` | Hide vent/clean until this heater reports `5A25` 170/171 |
 
 ### What stayed the same
 
