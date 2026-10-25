@@ -1,5 +1,5 @@
 substitutions:
-  name: blproxy
+  name: blproxyesp
   friendly_name: BLProxy
   heater_mac: "C8:17:F5:28:E7:9D"
   controller_code: "100000000"
@@ -104,6 +104,10 @@ globals:
     type: uint32_t
     restore_value: no
     initial_value: "0"
+  - id: mudiro_last_hex
+    type: std::string
+    restore_value: no
+    initial_value: '""'
 
 ble_client:
   - mac_address: ${heater_mac}
@@ -191,18 +195,20 @@ text_sensor:
             }
             id(mudiro_last_frame).publish_state(name);
             id(mudiro_notify_count).publish_state(id(mudiro_notifies));
+            id(mudiro_last_hex) = mudiro_to_hex(bytes);
+            id(mudiro_last_hex_sensor).publish_state(id(mudiro_last_hex));
         - homeassistant.event:
-            event: diesel_heater_esphome_notify
+            event: esphome.diesel_heater_notify
             data:
               address: ${heater_mac}
-              payload: !lambda |-
-                const std::string &raw = id(mudiro_rx).state;
-                std::vector<uint8_t> bytes(raw.begin(), raw.end());
-                return mudiro_to_hex(bytes);
+              payload: !lambda 'return id(mudiro_last_hex);'
 
   - platform: template
     name: "Mudiro last frame"
     id: mudiro_last_frame
+  - platform: template
+    name: "Mudiro last hex"
+    id: mudiro_last_hex_sensor
 
 binary_sensor:
   - platform: template

@@ -20,7 +20,7 @@ from homeassistant.components.recorder.statistics import (
     StatisticMetaData,
     StatisticMeanType,
 )
-from homeassistant.const import UnitOfTime, UnitOfVolume
+from homeassistant.const import EVENT_STATE_CHANGED, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
@@ -178,6 +178,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._client: BleakClient | None = None
         self._esphome_last_notify = 0.0
         self._esphome_unsub = None
+        self._esphome_unsub_state = None
+        self._esphome_write_missing_logged = False
         self._characteristic = None
         self._active_char_uuid: str | None = None  # Track which UUID variant is active
         self._notification_data: bytearray | None = None
@@ -539,7 +541,48 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             self.config_entry.data.get(CONF_ESPHOME_DEVICE, DEFAULT_ESPHOME_DEVICE)
         )
         slug = device.strip().lower().replace("-", "_").replace(" ", "_")
-        return f"{slug}_mudiro_write"
+        preferred = f"{slug}_mudiro_write"
+        names = self._esphome_domain_services()
+        if preferred in names or not names:
+            return preferred
+        for name in names:
+            if str(name).endswith("_mudiro_write"):
+                found = str(name)
+                if not self._esphome_write_missing_logged:
+                    self._logger.warning(
+                        "esphome.%s missing; using esphome.%s", preferred, found
+                    )
+                    self._esphome_write_missing_logged = True
+                return found
+        if not self._esphome_write_missing_logged:
+            self._logger.warning(
+                "esphome.%s missing; registered esphome actions: %s",
+                preferred,
+                ", ".join(sorted(names)) or "(none)",
+            )
+            self._esphome_write_missing_logged = True
+        return preferred
+
+    def _esphome_domain_services(self) -> list[str]:
+        hass = getattr(self, "hass", None)
+        services = getattr(hass, "services", None)
+        if services is None:
+            return []
+        try:
+            domain = services.async_services_for_domain("esphome")
+            if isinstance(domain, dict):
+                return [str(name) for name in domain]
+        except Exception:
+            pass
+        try:
+            all_services = services.async_services()
+            if isinstance(all_services, dict):
+                domain = all_services.get("esphome") or {}
+                if isinstance(domain, dict):
+                    return [str(name) for name in domain]
+        except Exception:
+            pass
+        return []
 
     @property
     def is_dz06_neo(self) -> bool:
@@ -1620,8 +1663,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         connected_this_update = False
 
         if self.esphome_holds_connection:
-            if not self._neo_config_received:
-                await self._async_esphome_refresh_session()
+            self._ingest_esphome_hex_states()
             if not self._esphome_last_notify:
                 self.data["connected"] = False
                 raise UpdateFailed("Waiting for ESPHome BLE notify")
@@ -1784,15 +1826,60 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if address != self.address.upper():
             return
         payload = str(data.get("payload") or "").replace(" ", "")
+        self._apply_esphome_payload(payload)
+
+    def _apply_esphome_payload(self, payload: str) -> None:
+        """Parse a hex FFF2 frame from an ESPHome event or text sensor."""
+        payload = str(payload or "").replace(" ", "")
         try:
             raw = bytearray.fromhex(payload)
         except ValueError:
             self._logger.debug("ESPHome notify ignored: payload is not hex")
             return
+        if not raw:
+            return
         self._esphome_last_notify = time.time()
         self.data["connected"] = True
         self._notification_callback(DZ06_NEO_NOTIFY_UUID, raw)
         self.async_set_updated_data(self.data)
+
+    def _ingest_esphome_hex_states(self) -> None:
+        """Pick up Mudiro last hex from the ESPHome sensor if events are dropped."""
+        hass = getattr(self, "hass", None)
+        async_all = getattr(getattr(hass, "states", None), "async_all", None)
+        if not callable(async_all):
+            return
+        try:
+            states = async_all()
+        except TypeError:
+            try:
+                states = async_all("sensor")
+            except TypeError:
+                return
+        if not isinstance(states, (list, tuple)):
+            return
+        for state in states:
+            entity_id = str(getattr(state, "entity_id", ""))
+            payload = str(getattr(state, "state", "") or "")
+            if "mudiro_last_hex" not in entity_id:
+                continue
+            if payload in ("", "unknown", "unavailable"):
+                continue
+            self._apply_esphome_payload(payload)
+            return
+
+    @callback
+    def _handle_esphome_hex_state(self, event: Any) -> None:
+        """Follow the ESPHome Mudiro last hex entity when native events are dropped."""
+        data = getattr(event, "data", None) or {}
+        entity_id = str(data.get("entity_id") or "")
+        if "mudiro_last_hex" not in entity_id:
+            return
+        new_state = data.get("new_state")
+        payload = getattr(new_state, "state", None)
+        if payload in (None, "", "unknown", "unavailable"):
+            return
+        self._apply_esphome_payload(str(payload))
 
     async def async_setup_esphome_bridge(self) -> None:
         """Listen for ESPHome notify events when this node owns GATT."""
@@ -1801,11 +1888,14 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._esphome_unsub = self.hass.bus.async_listen(
             EVENT_ESPHOME_NOTIFY, self._handle_esphome_notify
         )
+        self._esphome_unsub_state = self.hass.bus.async_listen(
+            EVENT_STATE_CHANGED, self._handle_esphome_hex_state
+        )
+        self._ingest_esphome_hex_states()
         self._logger.info(
             "ESPHome holds BLE for %s; Home Assistant will not open GATT",
             self.address,
         )
-        await self._async_esphome_refresh_session()
 
     async def _async_esphome_refresh_session(self) -> None:
         """Re-read Warm Drive config after Home Assistant restarts."""
@@ -4678,5 +4768,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if self._esphome_unsub is not None:
             self._esphome_unsub()
             self._esphome_unsub = None
+        if self._esphome_unsub_state is not None:
+            self._esphome_unsub_state()
+            self._esphome_unsub_state = None
 
         await self._cleanup_connection()

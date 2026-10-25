@@ -259,7 +259,7 @@ class TestConfirmStep:
         assert result["data"][CONF_NEO_PASSWORD] == 100000000
         assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
         assert result["data"][CONF_ESPHOME_HOLD_CONNECTION] is True
-        assert result["data"][CONF_ESPHOME_DEVICE] == "blproxy"
+        assert result["data"][CONF_ESPHOME_DEVICE] == "blproxyesp"
 
     async def test_warm_drive_discovery_persists_air_without_scan_record(self):
         flow = VevorHeaterConfigFlow()

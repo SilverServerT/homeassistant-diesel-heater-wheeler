@@ -133,8 +133,8 @@ CONF_NEO_PASSWORD: Final = "neo_password"
 CONF_NEO_CONTROLLER_TYPE: Final = "neo_controller_type"
 CONF_ESPHOME_HOLD_CONNECTION: Final = "esphome_hold_connection"
 CONF_ESPHOME_DEVICE: Final = "esphome_device"
-DEFAULT_ESPHOME_DEVICE: Final = "blproxy"
-EVENT_ESPHOME_NOTIFY: Final = "diesel_heater_esphome_notify"
+DEFAULT_ESPHOME_DEVICE: Final = "blproxyesp"
+EVENT_ESPHOME_NOTIFY: Final = "esphome.diesel_heater_notify"
 
 
 def esphome_holds_gatt(entry_data: Mapping[str, Any]) -> bool:

@@ -36,6 +36,8 @@ def _hold_coordinator(**overrides: object) -> VevorHeaterCoordinator:
     coordinator.hass.bus.async_listen = MagicMock(return_value=MagicMock())
     coordinator._esphome_last_notify = 0.0
     coordinator._esphome_unsub = None
+    coordinator._esphome_unsub_state = None
+    coordinator._esphome_write_missing_logged = False
     coordinator._client = None
     coordinator.async_set_updated_data = MagicMock()
     coordinator._logger = MagicMock()
@@ -51,7 +53,7 @@ def test_hold_mode_is_dz06_without_gatt_discovery() -> None:
     assert coordinator.esphome_holds_connection is True
     assert coordinator.is_dz06_neo is True
     assert coordinator.is_warm_drive_controller is True
-    assert coordinator._esphome_write_service() == "blproxy_mudiro_write"
+    assert coordinator._esphome_write_service() == "blproxyesp_mudiro_write"
 
 
 def test_mudiro_5kw_uses_esphome_gatt_without_hold_flag() -> None:
@@ -70,10 +72,18 @@ def test_mudiro_5kw_uses_esphome_gatt_without_hold_flag() -> None:
 
 
 def test_hold_write_service_uses_blproxy_by_default() -> None:
-    assert DEFAULT_ESPHOME_DEVICE == "blproxy"
+    assert DEFAULT_ESPHOME_DEVICE == "blproxyesp"
     coordinator = _hold_coordinator()
     del coordinator.config_entry.data[CONF_ESPHOME_DEVICE]
-    assert coordinator._esphome_write_service() == "blproxy_mudiro_write"
+    assert coordinator._esphome_write_service() == "blproxyesp_mudiro_write"
+
+
+def test_hold_write_service_discovers_registered_mudiro_write() -> None:
+    coordinator = _hold_coordinator()
+    coordinator.hass.services.async_services_for_domain = MagicMock(
+        return_value={"mudiro_ble_test_mudiro_write": {}}
+    )
+    assert coordinator._esphome_write_service() == "mudiro_ble_test_mudiro_write"
 
 
 @pytest.mark.asyncio
@@ -93,7 +103,7 @@ async def test_hold_mode_writes_go_to_esphome_service() -> None:
 
     coordinator.hass.services.async_call.assert_awaited_once_with(
         "esphome",
-        "blproxy_mudiro_write",
+        "blproxyesp_mudiro_write",
         {"hex": "a5090100"},
         blocking=True,
     )
@@ -127,6 +137,25 @@ def test_hold_mode_ignores_other_mac() -> None:
     assert coordinator._esphome_last_notify == 0.0
 
 
+def test_hold_mode_reads_mudiro_last_hex_sensor() -> None:
+    coordinator = _hold_coordinator()
+    frame = neo_config_response(device_type=1, oil_type=1)
+    coordinator.hass.states.async_all = MagicMock(
+        return_value=[
+            SimpleNamespace(
+                entity_id="sensor.blproxyesp_mudiro_last_hex",
+                state=frame.hex(),
+            )
+        ]
+    )
+
+    coordinator._ingest_esphome_hex_states()
+
+    assert coordinator.data["oil_type"] == 1
+    assert coordinator.data["connected"] is True
+    assert coordinator._esphome_last_notify > 0
+
+
 @pytest.mark.asyncio
 async def test_hold_mode_setup_listens_for_notify_events() -> None:
     coordinator = _hold_coordinator()
@@ -135,14 +164,18 @@ async def test_hold_mode_setup_listens_for_notify_events() -> None:
     coordinator._send_dz06_neo_board_info = AsyncMock()
     await coordinator.async_setup_esphome_bridge()
 
-    coordinator.hass.bus.async_listen.assert_called_once()
-    args = coordinator.hass.bus.async_listen.call_args[0]
-    assert args[0] == EVENT_ESPHOME_NOTIFY
-    assert args[1] == coordinator._handle_esphome_notify
+    listened = [call.args[0] for call in coordinator.hass.bus.async_listen.call_args_list]
+    assert EVENT_ESPHOME_NOTIFY in listened
+    notify = [
+        call.args[1]
+        for call in coordinator.hass.bus.async_listen.call_args_list
+        if call.args[0] == EVENT_ESPHOME_NOTIFY
+    ]
+    assert notify == [coordinator._handle_esphome_notify]
 
 
 @pytest.mark.asyncio
-async def test_hold_setup_rereads_warm_drive_session_after_ha_restart() -> None:
+async def test_hold_setup_does_not_block_on_session_reread() -> None:
     coordinator = _hold_coordinator()
     coordinator._neo_config_received = False
     coordinator._send_dz06_neo_configuration = AsyncMock(return_value=True)
@@ -151,6 +184,5 @@ async def test_hold_setup_rereads_warm_drive_session_after_ha_restart() -> None:
 
     await coordinator.async_setup_esphome_bridge()
 
-    coordinator._send_dz06_neo_configuration.assert_awaited_once()
-    coordinator._send_dz06_neo_run_settings.assert_awaited_once()
-    coordinator._send_dz06_neo_board_info.assert_awaited_once()
+    coordinator._send_dz06_neo_configuration.assert_not_called()
+    coordinator._send_dz06_neo_board_info.assert_not_called()

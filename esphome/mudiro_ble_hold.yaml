@@ -37,6 +37,10 @@ globals:
     type: uint16_t
     restore_value: no
     initial_value: "1"
+  - id: mudiro_last_hex
+    type: std::string
+    restore_value: no
+    initial_value: '""'
 
 time:
   - platform: homeassistant
@@ -107,14 +111,12 @@ text_sensor:
               id(mudiro_target) = bytes[15];
               id(mudiro_altitude) = (static_cast<uint16_t>(bytes[32]) << 8) | bytes[33];
             }
+            id(mudiro_last_hex) = mudiro_to_hex(bytes);
         - homeassistant.event:
-            event: diesel_heater_esphome_notify
+            event: esphome.diesel_heater_notify
             data:
               address: ${heater_mac}
-              payload: !lambda |-
-                const std::string &raw = id(mudiro_rx).state;
-                std::vector<uint8_t> bytes(raw.begin(), raw.end());
-                return mudiro_to_hex(bytes);
+              payload: !lambda 'return id(mudiro_last_hex);'
 
 binary_sensor:
   - platform: template
