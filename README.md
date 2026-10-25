@@ -709,7 +709,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5.1` | `d5bfbd4` | Oil type `1` diesel, `2` kerosene (LCD names) |
 | `v2.1.5.2` | `db410d8` | Status sensor: Off/Heating, target, and current |
 | `v2.1.5.3` | `6b8c201` | Climate row labeled Target; keep last setpoint when off is 0 |
-| `v2.1.5.4` | | ESPHome-heater: MUDIRO GATT held by `blproxy` |
+| `v2.1.5.4` | `0c3d5f6` | ESPHome-heater: MUDIRO GATT held by `blproxy` |
 
 ### What stayed the same
 
