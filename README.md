@@ -6,11 +6,12 @@
 
 <p align="center">
   <a href="https://github.com/hacs/integration"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS"></a>
-  <a href="https://github.com/Spettacolo83/homeassistant-diesel-heater/releases"><img src="https://img.shields.io/github/release/Spettacolo83/homeassistant-diesel-heater.svg" alt="GitHub release"></a>
-  <a href="https://github.com/Spettacolo83/homeassistant-diesel-heater/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Spettacolo83/homeassistant-diesel-heater.svg" alt="License"></a>
+  <a href="https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/releases"><img src="https://img.shields.io/github/release/SilverServerT/homeassistant-diesel-heater-wheeler.svg" alt="GitHub release"></a>
+  <a href="https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/blob/main/LICENSE"><img src="https://img.shields.io/github/license/SilverServerT/homeassistant-diesel-heater-wheeler.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/Custom%20fork-1%20classic%20BLE-0ea5e9.svg" alt="Custom fork 1">
 </p>
 
-> This is a maintained fork of the original [homeassistant-vevor-heater](https://github.com/MSDATDE/homeassistant-vevor-heater) by [@MSDATDE](https://github.com/MSDATDE), enhanced with HACS 2.0+ compatibility, multi-brand support, and additional improvements.
+> **This repository is Custom Fork 1** of [Spettacolo83/homeassistant-diesel-heater](https://github.com/Spettacolo83/homeassistant-diesel-heater) (itself a fork of [homeassistant-vevor-heater](https://github.com/MSDATDE/homeassistant-vevor-heater) by [@MSDATDE](https://github.com/MSDATDE)). **Stable `3.0.0`** on this branch is the MUDIRO / Warm Drive work using the **old method**: Home Assistant owns the BLE GATT connection (`bluetooth_proxy` or a USB adapter). It is **not** the upstream project.
 
 Control supported diesel air and water heaters from Home Assistant via Bluetooth. The integration supports AirHeaterBLE (AA55/AA66), AirHeaterCC (ABBA), Sunster (CBFF), Hcalory (MVP1/MVP2), HeatGenie/Boygu, Warm Drive/MUDIRO, and Webasto ThermoConnect Cronus controllers.
 
@@ -36,9 +37,21 @@ Control supported diesel air and water heaters from Home Assistant via Bluetooth
 - ⏰ **Time Sync** - Synchronize heater clock with Home Assistant
 - 🔥 **Burn-off** - Run at max power to burn soot: on dirty HA Off, in-run after hours/cycles, or deferred after LCD Off
 
+## Custom forks 1 and 2
+
+Install from [SilverServerT/homeassistant-diesel-heater-wheeler](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler), not from upstream. Pick **one** track:
+
+| Track | What it is | Branch | Release | GATT |
+| --- | --- | --- | --- | --- |
+| **Custom Fork 1 (this README)** | All MUDIRO / Warm Drive changes, classic HA BLE | `main` | **`v3.0.0`** (GitHub Latest) | Home Assistant / `bluetooth_proxy` connects to the heater |
+| **Custom Fork 2** | Same heater support plus ESPHome `blproxy.yaml` hold | `esphome-heater` | **`v3.0.0-esphome`** | ESP32 `ble_client` keeps GATT; HA talks to the ESP |
+
+Fork 2 README: [branch `esphome-heater`](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/blob/esphome-heater/README.md). Do not mix a Fork 1 install with Fork 2 firmware, or two HA clients on the same heater MAC.
+
 ## Table of Contents
 
 - [Features](#features)
+- [Custom forks 1 and 2](#custom-forks-1-and-2)
 - [Supported Devices](#supported-devices)
 - [Screenshots](#screenshots)
 - [Installation](#installation)
@@ -114,15 +127,15 @@ Full control over your heater including temperature, level, and mode selection:
 1. Open HACS in Home Assistant
 2. Go to "Integrations"
 3. Click the three dots menu → "Custom repositories"
-4. Add this repository: `https://github.com/Spettacolo83/homeassistant-diesel-heater`
+4. Add this repository: `https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler`
 5. Category: "Integration"
 6. Click "Add"
-7. Search for "Diesel Heater" and install
+7. Search for "Diesel Heater" and install **`3.0.0`** (Custom Fork 1, classic BLE). Use **`3.0.0-esphome`** only if you want Custom Fork 2.
 8. Restart Home Assistant
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub](https://github.com/Spettacolo83/homeassistant-diesel-heater/releases)
+1. Download **`v3.0.0`** from [this fork’s releases](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/releases)
 2. Copy the `custom_components/diesel_heater` folder to your Home Assistant's `custom_components` directory
 3. Restart Home Assistant
 
@@ -767,7 +780,12 @@ Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat r
 
 ## Changelog
 
-### Version 2.1.5.3 (Latest)
+### Version 3.0.0 (Latest — Custom Fork 1)
+
+- Stable cut of the MUDIRO / Warm Drive work on **classic Home Assistant BLE** (same GATT path as `v2.1.5.3`)
+- This branch is **Custom Fork 1**. ESPHome `blproxy.yaml` hold is **Custom Fork 2** (`v3.0.0-esphome` on `esphome-heater`)
+
+### Version 2.1.5.3
 - Device climate row: `Off · Target: 14 °C` / `Currently: 12 °C` (HA still concatenates state + setpoint; the state word is now labeled Target)
 - Warm Drive off frames with target `0` keep the last real setpoint (including Fahrenheit)
 - Do not create the generic Heater Level fan on Warm Drive
