@@ -176,7 +176,7 @@ sensor:
     update_interval: never
 
 interval:
-  - interval: 2s
+  - interval: 15s
     then:
       - if:
           condition:

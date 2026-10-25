@@ -14,6 +14,9 @@ api:
   encryption:
     key: !secret api_encryption_key
   max_send_queue: 32
+  on_client_connected:
+    - delay: 2s
+    - script.execute: mudiro_session
   services:
     - service: mudiro_write
       variables:
@@ -109,6 +112,45 @@ globals:
     restore_value: no
     initial_value: '""'
 
+script:
+  - id: mudiro_session
+    mode: restart
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: mudiro_connected
+          then:
+            - lambda: ESP_LOGI("mudiro", "session 5C/FF/5D");
+            - ble_client.ble_write:
+                id: mudiro_client
+                service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+                characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+                value: !lambda |-
+                  uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
+                  auto packet = mudiro_session_packet(0x5C, ts, id(mudiro_password));
+                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
+                  return packet;
+            - delay: 500ms
+            - ble_client.ble_write:
+                id: mudiro_client
+                service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+                characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+                value: !lambda |-
+                  uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
+                  auto packet = mudiro_session_packet(0xFF, ts, id(mudiro_password));
+                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
+                  return packet;
+            - delay: 500ms
+            - ble_client.ble_write:
+                id: mudiro_client
+                service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+                characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+                value: !lambda |-
+                  uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
+                  auto packet = mudiro_session_packet(0x5D, ts, id(mudiro_password));
+                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
+                  return packet;
+
 ble_client:
   - mac_address: ${heater_mac}
     id: mudiro_client
@@ -121,38 +163,7 @@ ble_client:
         - lambda: ESP_LOGI("mudiro", "connected to ${heater_mac}");
         - esp32_ble_tracker.stop_scan:
         - delay: 500ms
-        - lambda: ESP_LOGI("mudiro", "handshake write 5C (config)");
-        - ble_client.ble_write:
-            id: mudiro_client
-            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
-            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
-            value: !lambda |-
-              uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-              auto packet = mudiro_session_packet(0x5C, ts, id(mudiro_password));
-              ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-              return packet;
-        - delay: 500ms
-        - lambda: ESP_LOGI("mudiro", "handshake write FF (run settings)");
-        - ble_client.ble_write:
-            id: mudiro_client
-            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
-            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
-            value: !lambda |-
-              uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-              auto packet = mudiro_session_packet(0xFF, ts, id(mudiro_password));
-              ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-              return packet;
-        - delay: 500ms
-        - lambda: ESP_LOGI("mudiro", "handshake write 5D (board info)");
-        - ble_client.ble_write:
-            id: mudiro_client
-            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
-            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
-            value: !lambda |-
-              uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-              auto packet = mudiro_session_packet(0x5D, ts, id(mudiro_password));
-              ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-              return packet;
+        - script.execute: mudiro_session
     on_disconnect:
       then:
         - binary_sensor.template.publish:
@@ -229,7 +240,7 @@ sensor:
     update_interval: never
 
 interval:
-  - interval: 2s
+  - interval: 15s
     then:
       - if:
           condition:

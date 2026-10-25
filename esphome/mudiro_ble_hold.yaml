@@ -125,7 +125,7 @@ binary_sensor:
     device_class: connectivity
 
 interval:
-  - interval: 2s
+  - interval: 15s
     then:
       - if:
           condition:

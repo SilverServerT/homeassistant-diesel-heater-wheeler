@@ -180,6 +180,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         self._esphome_unsub = None
         self._esphome_unsub_state = None
         self._esphome_write_missing_logged = False
+        self._esphome_config_asked_at = 0.0
         self._characteristic = None
         self._active_char_uuid: str | None = None  # Track which UUID variant is active
         self._notification_data: bytearray | None = None
@@ -1664,6 +1665,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
 
         if self.esphome_holds_connection:
             self._ingest_esphome_hex_states()
+            if self._warm_drive_board_config is None:
+                await self._async_esphome_ask_board_config()
             if not self._esphome_last_notify:
                 self.data["connected"] = False
                 raise UpdateFailed("Waiting for ESPHome BLE notify")
@@ -1896,18 +1899,42 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             "ESPHome holds BLE for %s; Home Assistant will not open GATT",
             self.address,
         )
+        await self._async_esphome_ask_board_config()
 
-    async def _async_esphome_refresh_session(self) -> None:
-        """Re-read Warm Drive config after Home Assistant restarts."""
-        if self._neo_config_received:
+    def _dz06_session_packet(self, opcode: int) -> bytearray:
+        """Build a Warm Drive 29 0D session frame without waiting for a reply."""
+        now = dt_util.now()
+        timestamp = int(now.timestamp()) + int(
+            (now.utcoffset() or timedelta()).total_seconds()
+        )
+        packet = bytearray((0x29, 0x0D, opcode, 0))
+        packet.extend(timestamp.to_bytes(4, "big"))
+        if opcode == 0xFF:
+            packet.extend((0, 0, 0, 0))
+        else:
+            password = int(self._neo_password)
+            if not 0 <= password <= 0x7FFFFFFF:
+                raise ValueError("invalid Neo password")
+            packet.extend(password.to_bytes(4, "big"))
+        packet.append(1)
+        packet.extend(self._modbus_crc16(packet))
+        return packet
+
+    async def _async_esphome_ask_board_config(self) -> None:
+        """Ask the ESP to refresh 5C16/A5/5D without blocking on GATT."""
+        if self._warm_drive_board_config is not None:
             return
+        now = time.time()
+        if now - self._esphome_config_asked_at < 30:
+            return
+        self._esphome_config_asked_at = now
         try:
-            await self._send_dz06_neo_configuration()
-            await self._send_dz06_neo_run_settings()
-            if self.is_warm_drive_controller:
-                await self._send_dz06_neo_board_info()
-        except HomeAssistantError as err:
-            self._logger.debug("ESPHome session refresh deferred: %s", err)
+            await self._write_gatt(self._dz06_session_packet(0x5C))
+            await self._write_gatt(self._dz06_session_packet(0xFF))
+            await self._write_gatt(self._dz06_session_packet(0x5D))
+        except (HomeAssistantError, TypeError, ValueError, OverflowError) as err:
+            self._logger.debug("ESPHome board config request deferred: %s", err)
+            self._esphome_config_asked_at = 0.0
 
     async def _ensure_connected(self) -> None:
         """Ensure BLE connection is established with exponential backoff."""

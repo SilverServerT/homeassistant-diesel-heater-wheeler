@@ -689,7 +689,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
-`v2.1.5.5` (**ESPHome-heater**) keeps the 2.1.5.3 climate labels and MUDIRO entities. Warm Drive does not open GATT from Home Assistant. Node `blproxyesp` holds FFF0 and publishes **Mudiro last hex**; HA reads that sensor (native `esphome.*` events are dropped until the API client subscribes). Other heater models still use Home Assistant BLE. Flash [esphome/blproxy.yaml](esphome/blproxy.yaml) with [esphome/mudiro_warm_drive.h](esphome/mudiro_warm_drive.h). ESPHome device name must be `blproxyesp`.
+`v2.1.5.6` (**ESPHome-heater**) keeps the 2.1.5.3 climate labels and MUDIRO board settings. When HA connects, the ESP replays `5C`/`FF`/`5D` so oil type, pump size, oil Hz, fan RPM, glow, tank, and max heat unlock from `5C16` on **Mudiro last hex**. Status still uses the 15s `5A25` poll. Flash [esphome/blproxy.yaml](esphome/blproxy.yaml). ESPHome device name must be `blproxyesp`.
 
 `v2.1.5.3` labels the device climate row as `Off · Target:` (or `Heat · Target:`) so HA’s header reads `Off · Target: 14 °C` / `Currently: 12 °C`. Off frames that send target `0` keep the last real setpoint. Oil type stays diesel/kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
@@ -711,6 +711,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5.3` | `6b8c201` | Climate row labeled Target; keep last setpoint when off is 0 |
 | `v2.1.5.4` | `0c3d5f6` | ESPHome-heater: MUDIRO GATT held by `blproxyesp` |
 | `v2.1.5.5` | `95172ee` | ESPHome-heater: status from Mudiro last hex; no HA 5C/5D wait |
+| `v2.1.5.6` | | ESPHome-heater: refresh 5C16 so oil/pump/Hz/RPM stay writable |
 
 ### What stayed the same
 
@@ -770,6 +771,11 @@ Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same 
 Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
+
+### Version 2.1.5.6 (ESPHome-heater)
+- Replay `5C`/`FF`/`5D` when HA’s API client connects, and HA asks once without blocking
+- Unlocks oil type, pump size, oil Hz, fan RPM, glow, tank, max heat, auto start (`5C16` / `0x26`)
+- Status poll stays 15s; YAML: [esphome/blproxy.yaml](esphome/blproxy.yaml)
 
 ### Version 2.1.5.5 (ESPHome-heater)
 - Status from ESPHome **Mudiro last hex** (`sensor.*_mudiro_last_hex`); do not wait on 5C/FF/5D from HA

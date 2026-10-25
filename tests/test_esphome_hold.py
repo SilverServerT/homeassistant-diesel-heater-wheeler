@@ -38,6 +38,8 @@ def _hold_coordinator(**overrides: object) -> VevorHeaterCoordinator:
     coordinator._esphome_unsub = None
     coordinator._esphome_unsub_state = None
     coordinator._esphome_write_missing_logged = False
+    coordinator._esphome_config_asked_at = 0.0
+    coordinator._neo_password = 100000000
     coordinator._client = None
     coordinator.async_set_updated_data = MagicMock()
     coordinator._logger = MagicMock()
@@ -175,14 +177,16 @@ async def test_hold_mode_setup_listens_for_notify_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hold_setup_does_not_block_on_session_reread() -> None:
+async def test_hold_setup_asks_board_config_without_blocking() -> None:
     coordinator = _hold_coordinator()
-    coordinator._neo_config_received = False
+    coordinator._warm_drive_board_config = None
+    coordinator._dz06_session_packet = lambda opcode: bytearray((0x29, 0x0D, opcode))
+    coordinator._write_gatt = AsyncMock()
     coordinator._send_dz06_neo_configuration = AsyncMock(return_value=True)
-    coordinator._send_dz06_neo_run_settings = AsyncMock(return_value=True)
-    coordinator._send_dz06_neo_board_info = AsyncMock()
 
     await coordinator.async_setup_esphome_bridge()
 
     coordinator._send_dz06_neo_configuration.assert_not_called()
-    coordinator._send_dz06_neo_board_info.assert_not_called()
+    assert coordinator._write_gatt.await_count == 3
+    written = [call.args[0][2] for call in coordinator._write_gatt.await_args_list]
+    assert written == [0x5C, 0xFF, 0x5D]
