@@ -1,5 +1,6 @@
 """Constants for the Diesel Heater integration."""
-from typing import Final
+from collections.abc import Mapping
+from typing import Any, Final
 
 # Re-export all protocol constants from the diesel-heater-ble PyPI package.
 # This allows entity files to keep using `from .const import X` unchanged.
@@ -130,6 +131,24 @@ MAX_PIN: Final = 9999
 # Sunster Neo uses a separate numeric connection password.
 CONF_NEO_PASSWORD: Final = "neo_password"
 CONF_NEO_CONTROLLER_TYPE: Final = "neo_controller_type"
+CONF_ESPHOME_HOLD_CONNECTION: Final = "esphome_hold_connection"
+CONF_ESPHOME_DEVICE: Final = "esphome_device"
+DEFAULT_ESPHOME_DEVICE: Final = "blproxy"
+EVENT_ESPHOME_NOTIFY: Final = "diesel_heater_esphome_notify"
+
+
+def esphome_holds_gatt(entry_data: Mapping[str, Any]) -> bool:
+    """Return whether ESPHome owns GATT for this heater.
+
+    Warm Drive / MUDIRO 5 kW uses the ESP BLE client by default so Home
+    Assistant never opens the same MAC. Other models keep Bleak unless the
+    option is set. An explicit False opts Warm Drive back to HA GATT.
+    """
+    if entry_data.get(CONF_ESPHOME_HOLD_CONNECTION) is False:
+        return False
+    if entry_data.get(CONF_ESPHOME_HOLD_CONNECTION) is True:
+        return True
+    return entry_data.get(CONF_NEO_CONTROLLER_TYPE) in ("air", "water")
 DEFAULT_NEO_PASSWORD: Final = 100000000
 MIN_NEO_PASSWORD: Final = 0
 MAX_NEO_PASSWORD: Final = 2147483647

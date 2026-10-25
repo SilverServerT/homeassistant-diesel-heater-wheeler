@@ -16,6 +16,9 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_AUTO_OFFSET_MAX,
     CONF_CRONUS_HEATER_MODEL,
+    CONF_ESPHOME_DEVICE,
+    CONF_ESPHOME_HOLD_CONNECTION,
+    esphome_holds_gatt,
     CONF_EXTERNAL_TEMP_SENSOR,
     CONF_FORCE_TEMP_UNIT,
     CONF_NEO_PASSWORD,
@@ -25,6 +28,7 @@ from .const import (
     CONF_PRESET_COMFORT_TEMP,
     CRONUS_HEATER_MODEL_OPTIONS,
     DEFAULT_AUTO_OFFSET_MAX,
+    DEFAULT_ESPHOME_DEVICE,
     DEFAULT_CRONUS_HEATER_MODEL,
     DEFAULT_FORCE_TEMP_UNIT,
     DEFAULT_HCALORY_PIN,
@@ -154,6 +158,8 @@ class VevorHeaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data[CONF_NEO_CONTROLLER_TYPE] = (
                     _warm_drive_controller_type(self._discovery_info) or "air"
                 )
+                data[CONF_ESPHOME_HOLD_CONNECTION] = True
+                data[CONF_ESPHOME_DEVICE] = DEFAULT_ESPHOME_DEVICE
             return self.async_create_entry(
                 title=f"Vevor Heater {self._discovery_info.address[-5:].replace(':', '')}",
                 data=data,
@@ -382,6 +388,16 @@ class VevorHeaterOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Coerce(int),
                 vol.Range(min=MIN_NEO_PASSWORD, max=MAX_NEO_PASSWORD),
             ),
+            vol.Optional(
+                CONF_ESPHOME_HOLD_CONNECTION,
+                default=esphome_holds_gatt(self.config_entry.data),
+            ): bool,
+            vol.Optional(
+                CONF_ESPHOME_DEVICE,
+                default=self.config_entry.data.get(
+                    CONF_ESPHOME_DEVICE, DEFAULT_ESPHOME_DEVICE
+                ),
+            ): str,
             vol.Optional(
                 CONF_PRESET_AWAY_TEMP,
                 default=self.config_entry.data.get(CONF_PRESET_AWAY_TEMP, DEFAULT_PRESET_AWAY_TEMP)

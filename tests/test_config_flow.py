@@ -18,6 +18,8 @@ from custom_components.diesel_heater.const import (
     CONF_BURNOFF_DURATION,
     CONF_BURNOFF_ENABLED,
     CONF_CRONUS_HEATER_MODEL,
+    CONF_ESPHOME_DEVICE,
+    CONF_ESPHOME_HOLD_CONNECTION,
     CONF_EXTERNAL_TEMP_SENSOR,
     CONF_NEO_CONTROLLER_TYPE,
     CONF_NEO_PASSWORD,
@@ -218,6 +220,7 @@ class TestConfirmStep:
         assert result["type"] == "create_entry"
         assert result["data"][CONF_ADDRESS] == MOCK_ADDRESS
         assert result["data"][CONF_PIN] == DEFAULT_PIN
+        assert CONF_ESPHOME_HOLD_CONNECTION not in result["data"]
 
     async def test_hcalory_discovery_uses_app_default_pin(self):
         flow = VevorHeaterConfigFlow()
@@ -255,6 +258,8 @@ class TestConfirmStep:
         assert result["type"] == "create_entry"
         assert result["data"][CONF_NEO_PASSWORD] == 100000000
         assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
+        assert result["data"][CONF_ESPHOME_HOLD_CONNECTION] is True
+        assert result["data"][CONF_ESPHOME_DEVICE] == "blproxy"
 
     async def test_warm_drive_discovery_persists_air_without_scan_record(self):
         flow = VevorHeaterConfigFlow()
@@ -264,6 +269,7 @@ class TestConfirmStep:
 
         assert result["type"] == "create_entry"
         assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "air"
+        assert result["data"][CONF_ESPHOME_HOLD_CONNECTION] is True
 
     async def test_warm_drive_discovery_records_water_controller_type(self):
         flow = VevorHeaterConfigFlow()
@@ -276,6 +282,7 @@ class TestConfirmStep:
 
         assert result["type"] == "create_entry"
         assert result["data"][CONF_NEO_CONTROLLER_TYPE] == "water"
+        assert result["data"][CONF_ESPHOME_HOLD_CONNECTION] is True
 
     async def test_creates_entry_with_custom_pin(self):
         flow = VevorHeaterConfigFlow()

@@ -1,0 +1,156 @@
+# Warm Drive / MUDIRO: ESP32 owns the BLE link.
+#
+# Merge this into the ESPHome YAML that already runs bluetooth_proxy.
+# Do not let Home Assistant diesel_heater connect to the same MAC.
+# In HA: Diesel Heater options -> enable "ESPHome holds Bluetooth connection"
+# and set ESPHome device name to this node's name.
+#
+# Add to your existing proxy config:
+#   substitutions:
+#     heater_mac: "C8:17:F5:28:E7:9D"
+#     controller_code: "100000000"
+#   packages:
+#     mudiro_hold: !include mudiro_ble_hold.yaml
+
+substitutions:
+  heater_mac: "C8:17:F5:28:E7:9D"
+  controller_code: "100000000"
+
+esphome:
+  includes:
+    - mudiro_warm_drive.h
+
+globals:
+  - id: mudiro_password
+    type: uint32_t
+    restore_value: no
+    initial_value: "${controller_code}"
+  - id: mudiro_run_type
+    type: uint8_t
+    restore_value: no
+    initial_value: "2"
+  - id: mudiro_target
+    type: uint8_t
+    restore_value: no
+    initial_value: "20"
+  - id: mudiro_altitude
+    type: uint16_t
+    restore_value: no
+    initial_value: "1"
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+ble_client:
+  - mac_address: ${heater_mac}
+    id: mudiro_client
+    auto_connect: true
+    on_connect:
+      then:
+        - binary_sensor.template.publish:
+            id: mudiro_connected
+            state: ON
+        - logger.log: "MUDIRO connected; starting Warm Drive session"
+        - delay: 400ms
+        - ble_client.ble_write:
+            id: mudiro_client
+            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+            value: !lambda |-
+              uint32_t ts = id(ha_time).now().is_valid() ? id(ha_time).now().timestamp : 0;
+              return mudiro_session_packet(0x5C, ts, id(mudiro_password));
+        - delay: 400ms
+        - ble_client.ble_write:
+            id: mudiro_client
+            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+            value: !lambda |-
+              uint32_t ts = id(ha_time).now().is_valid() ? id(ha_time).now().timestamp : 0;
+              return mudiro_session_packet(0xFF, ts, id(mudiro_password));
+        - delay: 400ms
+        - ble_client.ble_write:
+            id: mudiro_client
+            service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+            characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+            value: !lambda |-
+              uint32_t ts = id(ha_time).now().is_valid() ? id(ha_time).now().timestamp : 0;
+              return mudiro_session_packet(0x5D, ts, id(mudiro_password));
+    on_disconnect:
+      then:
+        - binary_sensor.template.publish:
+            id: mudiro_connected
+            state: OFF
+        - logger.log: "MUDIRO disconnected; ESPHome will reconnect"
+
+text_sensor:
+  - platform: ble_client
+    ble_client_id: mudiro_client
+    name: "Mudiro Notify"
+    id: mudiro_rx
+    internal: true
+    service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+    characteristic_uuid: 0000FFF2-0000-1000-8000-00805F9B34FB
+    notify: true
+    update_interval: never
+    on_value:
+      then:
+        - lambda: |-
+            const std::string &raw = id(mudiro_rx).state;
+            std::vector<uint8_t> bytes(raw.begin(), raw.end());
+            if (bytes.size() >= 6 && bytes[0] == 0xA5) {
+              id(mudiro_run_type) = bytes[4];
+              id(mudiro_target) = bytes[5];
+            }
+            if (bytes.size() == 39 && bytes[0] == 0x5A && bytes[1] == 0x25) {
+              id(mudiro_run_type) = bytes[34];
+              id(mudiro_target) = bytes[15];
+              id(mudiro_altitude) = (static_cast<uint16_t>(bytes[32]) << 8) | bytes[33];
+            }
+        - homeassistant.event:
+            event: diesel_heater_esphome_notify
+            data:
+              address: ${heater_mac}
+              payload: !lambda |-
+                const std::string &raw = id(mudiro_rx).state;
+                std::vector<uint8_t> bytes(raw.begin(), raw.end());
+                return mudiro_to_hex(bytes);
+
+binary_sensor:
+  - platform: template
+    name: "Mudiro BLE Connected"
+    id: mudiro_connected
+    device_class: connectivity
+
+interval:
+  - interval: 2s
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: mudiro_connected
+          then:
+            - ble_client.ble_write:
+                id: mudiro_client
+                service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+                characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+                value: !lambda |-
+                  return mudiro_poll_packet(id(mudiro_run_type), id(mudiro_target), id(mudiro_altitude));
+
+api:
+  services:
+    - service: mudiro_write
+      variables:
+        hex: string
+      then:
+        - if:
+            condition:
+              binary_sensor.is_on: mudiro_connected
+            then:
+              - ble_client.ble_write:
+                  id: mudiro_client
+                  service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
+                  characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
+                  value: !lambda |-
+                    return mudiro_parse_hex(hex);
+            else:
+              - logger.log: "MUDIRO write dropped: BLE not connected"

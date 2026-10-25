@@ -689,6 +689,8 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 
 ## Warm Drive since beta.25
 
+`v2.1.5.4` (**ESPHome-heater**) keeps the 2.1.5.3 climate labels and MUDIRO entities, but Warm Drive no longer opens GATT from Home Assistant. The ESPHome node `blproxy` holds FFF0, runs `5C`/`FF`/`5D` plus the 2s poll, and forwards notifies. Other heater models still use Home Assistant BLE. Flash [esphome/blproxy.yaml](esphome/blproxy.yaml) with [esphome/mudiro_warm_drive.h](esphome/mudiro_warm_drive.h). Leave HA `diesel_heater` on this branch; the ESPHome device name must be `blproxy`. Keep `bluetooth_proxy` off on that node until the heater link is stable.
+
 `v2.1.5.3` labels the device climate row as `Off · Target:` (or `Heat · Target:`) so HA’s header reads `Off · Target: 14 °C` / `Currently: 12 °C`. Off frames that send target `0` keep the last real setpoint. Oil type stays diesel/kerosene. Ventilation and cleaning stay withdrawn. The connect sequence, the PIN field, and the identity rules match `v2.1.5-beta.25` (`8237b15`). Protocol background stays in [docs/protocols/WARM_DRIVE.md](docs/protocols/WARM_DRIVE.md).
 
 | Tag | Commit | Added |
@@ -707,6 +709,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5.1` | `d5bfbd4` | Oil type `1` diesel, `2` kerosene (LCD names) |
 | `v2.1.5.2` | `db410d8` | Status sensor: Off/Heating, target, and current |
 | `v2.1.5.3` | `6b8c201` | Climate row labeled Target; keep last setpoint when off is 0 |
+| `v2.1.5.4` | | ESPHome-heater: MUDIRO GATT held by `blproxy` |
 
 ### What stayed the same
 
@@ -766,6 +769,12 @@ Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same 
 Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
+
+### Version 2.1.5.4 (ESPHome-heater)
+- MUDIRO 5 kW / Warm Drive: ESPHome (`blproxy`) owns GATT; Home Assistant does not connect to that MAC
+- Commands go to `esphome.blproxy_mudiro_write`; notifies arrive as `diesel_heater_esphome_notify`
+- Same Warm Drive entities as 2.1.5.3 (climate Target/Current, oil diesel/kerosene, `0x26` board settings)
+- YAML: [esphome/blproxy.yaml](esphome/blproxy.yaml). Other heater brands unchanged (Home Assistant BLE)
 
 ### Version 2.1.5.3 (Latest)
 - Device climate row: `Off · Target: 14 °C` / `Currently: 12 °C` (HA still concatenates state + setpoint; the state word is now labeled Target)

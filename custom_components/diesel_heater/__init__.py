@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import shutil
+from types import SimpleNamespace
 from typing import Any
 
 import voluptuous as vol
@@ -25,7 +26,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, OLD_DOMAIN
+from .const import DOMAIN, OLD_DOMAIN, esphome_holds_gatt
 from .coordinator import VevorHeaterCoordinator
 
 DieselHeaterConfigEntry = ConfigEntry[VevorHeaterCoordinator]
@@ -363,18 +364,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: DieselHeaterConfigEntry)
     # Migrate entity unique_ids from older versions (preserves history)
     _migrate_entity_unique_ids(hass, entry)
 
-    # Get BLE device from Home Assistant's bluetooth integration
-    ble_device = bluetooth.async_ble_device_from_address(
-        hass, address.upper(), connectable=True
-    )
-
-    if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Diesel Heater with address {address}"
+    if esphome_holds_gatt(entry.data):
+        ble_device = SimpleNamespace(address=address.upper(), name="Air Heater")
+        _LOGGER.info(
+            "ESPHome holds Bluetooth for %s; skipping Home Assistant GATT connect",
+            address,
         )
+    else:
+        ble_device = bluetooth.async_ble_device_from_address(
+            hass, address.upper(), connectable=True
+        )
+        if not ble_device:
+            raise ConfigEntryNotReady(
+                f"Could not find Diesel Heater with address {address}"
+            )
 
     # Create coordinator
     coordinator = VevorHeaterCoordinator(hass, ble_device, entry)
+    if esphome_holds_gatt(entry.data):
+        await coordinator.async_setup_esphome_bridge()
 
     # Load persistent fuel data
     await coordinator.async_load_data()

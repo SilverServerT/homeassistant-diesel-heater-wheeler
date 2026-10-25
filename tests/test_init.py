@@ -454,6 +454,39 @@ class TestAsyncSetupEntry:
         }
 
     @pytest.mark.asyncio
+    async def test_setup_mudiro_skips_ha_gatt_lookup(self):
+        """Warm Drive / MUDIRO 5 kW uses the ESP GATT holder, not Bleak."""
+        hass = MagicMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.services.has_service.return_value = False
+        hass.services.async_register = MagicMock()
+
+        entry = MagicMock()
+        entry.data = {
+            CONF_ADDRESS: "C8:17:F5:28:E7:9D",
+            "neo_controller_type": "air",
+        }
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_load_data = AsyncMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.async_setup_esphome_bridge = AsyncMock()
+
+        with patch(
+            "custom_components.diesel_heater.bluetooth"
+        ) as mock_bt, patch(
+            "custom_components.diesel_heater._migrate_entity_unique_ids"
+        ), patch(
+            "custom_components.diesel_heater.VevorHeaterCoordinator",
+            return_value=mock_coordinator,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        mock_bt.async_ble_device_from_address.assert_not_called()
+        mock_coordinator.async_setup_esphome_bridge.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_setup_entry_timeout_continues(self):
         """Test setup continues even after connection timeout."""
         import asyncio

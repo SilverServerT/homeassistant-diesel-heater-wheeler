@@ -22,6 +22,7 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.const import UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -47,6 +48,8 @@ from .const import (
     CONF_FORCE_TEMP_UNIT,
     CONF_CRONUS_HEATER_MODEL,
     CRONUS_FUEL_PROFILES,
+    CONF_ESPHOME_DEVICE,
+    esphome_holds_gatt,
     CONF_NEO_PASSWORD,
     CONF_NEO_CONTROLLER_TYPE,
     CONF_PIN,
@@ -59,8 +62,10 @@ from .const import (
     DEFAULT_BURNOFF_DURATION,
     DEFAULT_BURNOFF_ENABLED,
     DEFAULT_FORCE_TEMP_UNIT,
+    DEFAULT_ESPHOME_DEVICE,
     DEFAULT_NEO_PASSWORD,
     DEFAULT_PIN,
+    EVENT_ESPHOME_NOTIFY,
     DEFAULT_TEMPERATURE_OFFSET,
     FORCE_TEMP_UNIT_CELSIUS,
     FORCE_TEMP_UNIT_FAHRENHEIT,
@@ -171,6 +176,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             _LOGGER, {"heater_id": ble_device.address[-5:]}
         )
         self._client: BleakClient | None = None
+        self._esphome_last_notify = 0.0
+        self._esphome_unsub = None
         self._characteristic = None
         self._active_char_uuid: str | None = None  # Track which UUID variant is active
         self._notification_data: bytearray | None = None
@@ -207,7 +214,7 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             7: ProtocolHcalory(),
             9: ProtocolCronus(),
         }
-        self._is_abba_device = False  # True if using ABBA/HeaterCC protocol
+        self._is_abba_device = esphome_holds_gatt(config_entry.data)
         self._abba_write_char = None  # ABBA devices use separate write characteristic
         self._is_heatgenie_device = False
         self._heatgenie_write_char = None
@@ -523,8 +530,22 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         )
 
     @property
+    def esphome_holds_connection(self) -> bool:
+        """Return whether ESPHome owns the GATT link for this heater."""
+        return esphome_holds_gatt(self.config_entry.data)
+
+    def _esphome_write_service(self) -> str:
+        device = str(
+            self.config_entry.data.get(CONF_ESPHOME_DEVICE, DEFAULT_ESPHOME_DEVICE)
+        )
+        slug = device.strip().lower().replace("-", "_").replace(" ", "_")
+        return f"{slug}_mudiro_write"
+
+    @property
     def is_dz06_neo(self) -> bool:
         """Return whether the split-FFF0 Sunster Neo transport is active."""
+        if self.esphome_holds_connection:
+            return True
         return bool(
             self._is_abba_device
             and self._characteristic
@@ -1598,6 +1619,17 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         await self._check_daily_runtime_reset()
         connected_this_update = False
 
+        if self.esphome_holds_connection:
+            if not self._neo_config_received:
+                await self._async_esphome_refresh_session()
+            if not self._esphome_last_notify:
+                self.data["connected"] = False
+                raise UpdateFailed("Waiting for ESPHome BLE notify")
+            if time.time() - self._esphome_last_notify > 45:
+                self.data["connected"] = False
+                raise UpdateFailed("ESPHome BLE notify silent for 45s")
+            return self.data
+
         if not self._client or not self._client.is_connected:
             try:
                 # Outer timeout: bleak's `connect()` has no default and
@@ -1744,8 +1776,53 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
                 return self.data
             raise UpdateFailed(f"Error updating data: {err}")
 
+    @callback
+    def _handle_esphome_notify(self, event: Any) -> None:
+        """Parse a Warm Drive notification forwarded by the ESPHome node."""
+        data = getattr(event, "data", None) or {}
+        address = str(data.get("address") or "").replace("-", ":").upper()
+        if address != self.address.upper():
+            return
+        payload = str(data.get("payload") or "").replace(" ", "")
+        try:
+            raw = bytearray.fromhex(payload)
+        except ValueError:
+            self._logger.debug("ESPHome notify ignored: payload is not hex")
+            return
+        self._esphome_last_notify = time.time()
+        self.data["connected"] = True
+        self._notification_callback(DZ06_NEO_NOTIFY_UUID, raw)
+        self.async_set_updated_data(self.data)
+
+    async def async_setup_esphome_bridge(self) -> None:
+        """Listen for ESPHome notify events when this node owns GATT."""
+        if not self.esphome_holds_connection or self._esphome_unsub is not None:
+            return
+        self._esphome_unsub = self.hass.bus.async_listen(
+            EVENT_ESPHOME_NOTIFY, self._handle_esphome_notify
+        )
+        self._logger.info(
+            "ESPHome holds BLE for %s; Home Assistant will not open GATT",
+            self.address,
+        )
+        await self._async_esphome_refresh_session()
+
+    async def _async_esphome_refresh_session(self) -> None:
+        """Re-read Warm Drive config after Home Assistant restarts."""
+        if self._neo_config_received:
+            return
+        try:
+            await self._send_dz06_neo_configuration()
+            await self._send_dz06_neo_run_settings()
+            if self.is_warm_drive_controller:
+                await self._send_dz06_neo_board_info()
+        except HomeAssistantError as err:
+            self._logger.debug("ESPHome session refresh deferred: %s", err)
+
     async def _ensure_connected(self) -> None:
         """Ensure BLE connection is established with exponential backoff."""
+        if self.esphome_holds_connection:
+            return
         # Check if already connected
         if self._client and self._client.is_connected:
             self._connection_attempts = 0  # Reset on successful connection
@@ -2730,6 +2807,14 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         Uses response=False to avoid authorization issues with BLE
         proxies (e.g., ESPHome BLE proxy). The heater sends a notification as response.
         """
+        if self.esphome_holds_connection:
+            await self.hass.services.async_call(
+                "esphome",
+                self._esphome_write_service(),
+                {"hex": bytes(packet).hex()},
+                blocking=True,
+            )
+            return
         if getattr(self, "_is_cronus_device", False) and getattr(self, "_cronus_write_char", None):
             write_char = self._cronus_write_char
             char_uuid = write_char.uuid
@@ -3219,14 +3304,16 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
             timeout = 0.5  # seconds (@Xev: app completes in ~1.5s, 0.5s per attempt)
             if max_retries == 1:  # If caller didn't specify, use default for Hcalory
                 max_retries = 3  # Retry up to 3 times for stability
-        if not self._client or not self._client.is_connected:
+        if not self.esphome_holds_connection and (
+            not self._client or not self._client.is_connected
+        ):
             self._logger.info(
                 "Cannot send command: heater not connected. "
                 "The integration will attempt to reconnect automatically."
             )
             return False
 
-        if not self._characteristic:
+        if not self.esphome_holds_connection and not self._characteristic:
             self._logger.error(
                 "Cannot send command: BLE characteristic not found. "
                 "Try reloading the integration."
@@ -4588,5 +4675,8 @@ class VevorHeaterCoordinator(DataUpdateCoordinator):
         if self._auto_offset_unsub:
             self._auto_offset_unsub()
             self._auto_offset_unsub = None
+        if self._esphome_unsub is not None:
+            self._esphome_unsub()
+            self._esphome_unsub = None
 
         await self._cleanup_connection()
