@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Custom%20fork-2%20ESPHome%20hold-22c55e.svg" alt="Custom fork 2">
 </p>
 
-> **This repository branch is Custom Fork 2** of [Spettacolo83/homeassistant-diesel-heater](https://github.com/Spettacolo83/homeassistant-diesel-heater) (itself a fork of [homeassistant-vevor-heater](https://github.com/MSDATDE/homeassistant-vevor-heater) by [@MSDATDE](https://github.com/MSDATDE)). **Stable `3.0.0-esphome`** is the MUDIRO / Warm Drive work with **ESPHome `blproxy.yaml`**: the ESP32 keeps GATT so a Home Assistant restart does not drop the heater. It is **not** the upstream project and it is **not** GitHub Latest (`v3.0.0` is Custom Fork 1).
+> **This repository branch is Custom Fork 2** of [Spettacolo83/homeassistant-diesel-heater](https://github.com/Spettacolo83/homeassistant-diesel-heater) (itself a fork of [homeassistant-vevor-heater](https://github.com/MSDATDE/homeassistant-vevor-heater) by [@MSDATDE](https://github.com/MSDATDE)). **Stable `3.0.1-esphome`** is the MUDIRO / Warm Drive work with **ESPHome `blproxy.yaml`**: the ESP32 keeps GATT so a Home Assistant restart does not drop the heater. It is **not** the upstream project and it is **not** GitHub Latest (`v3.0.0` is Custom Fork 1).
 
 Control supported diesel air and water heaters from Home Assistant via Bluetooth. The integration supports AirHeaterBLE (AA55/AA66), AirHeaterCC (ABBA), Sunster (CBFF), Hcalory (MVP1/MVP2), HeatGenie/Boygu, Warm Drive/MUDIRO, and Webasto ThermoConnect Cronus controllers.
 
@@ -44,7 +44,7 @@ Install from [SilverServerT/homeassistant-diesel-heater-wheeler](https://github.
 | Track | What it is | Branch | Release | GATT |
 | --- | --- | --- | --- | --- |
 | **Custom Fork 1** | All MUDIRO / Warm Drive changes, classic HA BLE | `main` | **`v3.0.0`** (GitHub Latest) | Home Assistant / `bluetooth_proxy` connects to the heater |
-| **Custom Fork 2 (this README)** | Same heater support plus ESPHome `blproxy.yaml` hold | `esphome-heater` | **`v3.0.0-esphome`** | ESP32 `ble_client` keeps GATT; HA talks to the ESP |
+| **Custom Fork 2 (this README)** | Same heater support plus ESPHome `blproxy.yaml` hold | `esphome-heater` | **`v3.0.1-esphome`** | ESP32 `ble_client` keeps GATT; HA talks to the ESP |
 
 Fork 1 README: [branch `main`](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/blob/main/README.md). Flash [esphome/blproxy.yaml](esphome/blproxy.yaml) with node name `blproxyesp`. Do not enable HA `bluetooth_proxy` active connections to the same heater MAC.
 
@@ -130,13 +130,13 @@ Full control over your heater including temperature, level, and mode selection:
 4. Add this repository: `https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler`
 5. Category: "Integration"
 6. Click "Add"
-7. Search for "Diesel Heater" and install **`3.0.0-esphome`** (Custom Fork 2). Use **`3.0.0`** only if you want Custom Fork 1 (classic BLE, no `blproxy.yaml`).
+7. Search for "Diesel Heater" and install **`3.0.1-esphome`** (Custom Fork 2). Use **`3.0.0`** only if you want Custom Fork 1 (classic BLE, no `blproxy.yaml`).
 8. Restart Home Assistant
 9. Flash [esphome/blproxy.yaml](esphome/blproxy.yaml). The ESPHome device name must be `blproxyesp`. Leave `bluetooth_proxy` **inactive** on that node so it does not steal the heater from `ble_client`.
 
 ### Manual Installation
 
-1. Download **`v3.0.0-esphome`** from [this fork’s releases](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/releases)
+1. Download **`v3.0.1-esphome`** from [this fork’s releases](https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/releases)
 2. Copy the `custom_components/diesel_heater` folder to your Home Assistant's `custom_components` directory
 3. Restart Home Assistant
 
@@ -726,6 +726,8 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5.4` | `0c3d5f6` | ESPHome-heater: MUDIRO GATT held by `blproxyesp` |
 | `v2.1.5.5` | `95172ee` | ESPHome-heater: status from Mudiro last hex; no HA 5C/5D wait |
 | `v2.1.5.6` | `703d328` | ESPHome-heater: refresh 5C16 so oil/pump/Hz/RPM stay writable |
+| `v3.0.0-esphome` | `45f9b86` | Custom Fork 2 stable |
+| `v3.0.1-esphome` | | Quiet `blproxy.yaml`; one handshake per 10s |
 
 ### What stayed the same
 
@@ -785,6 +787,12 @@ Byte 15 is `00` and the CRC matches. The confirm `5C16` came back with the same 
 Ventilation, cleaning, and the weekly timer are still not sent. Oil type, heat reset/stop temperatures, oil frequency, fan RPM limits, and glow-plug power use the same `0x26` echo as tank and auto start. On the live MUDIRO `5C16` those were oil `1`, 8–35°C, pump 15–55 Hz, fan 1550–4500 RPM, glow byte `5`.
 
 ## Changelog
+
+### Version 3.0.1-esphome (Custom Fork 2)
+
+- Quiet [esphome/blproxy.yaml](esphome/blproxy.yaml): INFO logs only on connect, disconnect, and session start; no TX/notify hex dumps
+- Drop last-frame / notify-count / 5A25-count sensors (HA still uses **Mudiro last hex**)
+- Handshake is `single` and skipped if it already ran in the last 10 s (stops stacked `5C/FF/5D` from HA + log viewer)
 
 ### Version 3.0.0-esphome (Custom Fork 2)
 

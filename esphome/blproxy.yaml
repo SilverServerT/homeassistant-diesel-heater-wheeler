@@ -53,12 +53,12 @@ esp32:
       CONFIG_BT_BLE_EST_SCAN_BAL_ENABLE: "y"
 
 logger:
-  level: DEBUG
+  level: INFO
   logs:
-    mudiro: DEBUG
-    esp32_ble_tracker: INFO
-    bluetooth_proxy: INFO
-    bluetooth_connection: INFO
+    mudiro: INFO
+    esp32_ble_tracker: WARN
+    bluetooth_proxy: WARN
+    bluetooth_connection: WARN
 
 esp32_ble:
   max_connections: 3
@@ -99,26 +99,29 @@ globals:
     type: uint16_t
     restore_value: no
     initial_value: "1"
-  - id: mudiro_notifies
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-  - id: mudiro_status_frames
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
   - id: mudiro_last_hex
     type: std::string
     restore_value: no
     initial_value: '""'
+  - id: mudiro_session_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
 
 script:
   - id: mudiro_session
-    mode: restart
+    mode: single
     then:
       - if:
           condition:
-            binary_sensor.is_on: mudiro_connected
+            lambda: |-
+              if (!id(mudiro_connected).state)
+                return false;
+              uint32_t now = millis();
+              if (id(mudiro_session_ms) != 0 && (now - id(mudiro_session_ms)) < 10000)
+                return false;
+              id(mudiro_session_ms) = now;
+              return true;
           then:
             - lambda: ESP_LOGI("mudiro", "session 5C/FF/5D");
             - ble_client.ble_write:
@@ -127,9 +130,7 @@ script:
                 characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
                 value: !lambda |-
                   uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-                  auto packet = mudiro_session_packet(0x5C, ts, id(mudiro_password));
-                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-                  return packet;
+                  return mudiro_session_packet(0x5C, ts, id(mudiro_password));
             - delay: 500ms
             - ble_client.ble_write:
                 id: mudiro_client
@@ -137,9 +138,7 @@ script:
                 characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
                 value: !lambda |-
                   uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-                  auto packet = mudiro_session_packet(0xFF, ts, id(mudiro_password));
-                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-                  return packet;
+                  return mudiro_session_packet(0xFF, ts, id(mudiro_password));
             - delay: 500ms
             - ble_client.ble_write:
                 id: mudiro_client
@@ -147,9 +146,7 @@ script:
                 characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
                 value: !lambda |-
                   uint32_t ts = id(mudiro_time).now().is_valid() ? id(mudiro_time).now().timestamp : 0;
-                  auto packet = mudiro_session_packet(0x5D, ts, id(mudiro_password));
-                  ESP_LOGD("mudiro", "TX %s", mudiro_to_hex(packet).c_str());
-                  return packet;
+                  return mudiro_session_packet(0x5D, ts, id(mudiro_password));
 
 ble_client:
   - mac_address: ${heater_mac}
@@ -187,25 +184,15 @@ text_sensor:
         - lambda: |-
             const std::string &raw = id(mudiro_rx).state;
             std::vector<uint8_t> bytes(raw.begin(), raw.end());
-            id(mudiro_notifies) += 1;
-            const char *name = mudiro_frame_name(bytes);
-            ESP_LOGI("mudiro", "notify #%u %s (%u bytes) %s",
-                     static_cast<unsigned>(id(mudiro_notifies)), name,
-                     static_cast<unsigned>(bytes.size()),
-                     mudiro_to_hex(bytes).c_str());
             if (bytes.size() >= 6 && bytes[0] == 0xA5) {
               id(mudiro_run_type) = bytes[4];
               id(mudiro_target) = bytes[5];
             }
             if (bytes.size() == 39 && bytes[0] == 0x5A && bytes[1] == 0x25) {
-              id(mudiro_status_frames) += 1;
               id(mudiro_run_type) = bytes[34];
               id(mudiro_target) = bytes[15];
               id(mudiro_altitude) = (static_cast<uint16_t>(bytes[32]) << 8) | bytes[33];
-              id(mudiro_status_count).publish_state(id(mudiro_status_frames));
             }
-            id(mudiro_last_frame).publish_state(name);
-            id(mudiro_notify_count).publish_state(id(mudiro_notifies));
             id(mudiro_last_hex) = mudiro_to_hex(bytes);
             id(mudiro_last_hex_sensor).publish_state(id(mudiro_last_hex));
         - homeassistant.event:
@@ -215,9 +202,6 @@ text_sensor:
               payload: !lambda 'return id(mudiro_last_hex);'
 
   - platform: template
-    name: "Mudiro last frame"
-    id: mudiro_last_frame
-  - platform: template
     name: "Mudiro last hex"
     id: mudiro_last_hex_sensor
 
@@ -226,18 +210,6 @@ binary_sensor:
     name: "Mudiro BLE Connected"
     id: mudiro_connected
     device_class: connectivity
-
-sensor:
-  - platform: template
-    name: "Mudiro notify count"
-    id: mudiro_notify_count
-    accuracy_decimals: 0
-    update_interval: never
-  - platform: template
-    name: "Mudiro 5A25 count"
-    id: mudiro_status_count
-    accuracy_decimals: 0
-    update_interval: never
 
 interval:
   - interval: 15s
@@ -251,7 +223,5 @@ interval:
                 service_uuid: 0000FFF0-0000-1000-8000-00805F9B34FB
                 characteristic_uuid: 0000FFF1-0000-1000-8000-00805F9B34FB
                 value: !lambda |-
-                  auto packet = mudiro_poll_packet(
+                  return mudiro_poll_packet(
                       id(mudiro_run_type), id(mudiro_target), id(mudiro_altitude));
-                  ESP_LOGD("mudiro", "keepalive poll TX %s", mudiro_to_hex(packet).c_str());
-                  return packet;
