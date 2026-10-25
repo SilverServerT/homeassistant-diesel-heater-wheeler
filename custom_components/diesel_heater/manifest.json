@@ -1,12 +1,12 @@
 {
   "domain": "diesel_heater",
   "name": "Diesel Heater",
-  "codeowners": ["@Spettacolo83"],
+  "codeowners": ["@SilverServerT", "@Spettacolo83"],
   "config_flow": true,
   "dependencies": ["bluetooth"],
-  "documentation": "https://github.com/Spettacolo83/homeassistant-diesel-heater",
+  "documentation": "https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/tree/esphome-heater",
   "integration_type": "device",
-  "issue_tracker": "https://github.com/Spettacolo83/homeassistant-diesel-heater/issues",
+  "issue_tracker": "https://github.com/SilverServerT/homeassistant-diesel-heater-wheeler/issues",
   "iot_class": "local_polling",
   "loggers": ["diesel_heater_ble"],
   "requirements": ["diesel-heater-ble>=0.3.8"],
@@ -53,5 +53,5 @@
       "local_name": "BOYGU*"
     }
   ],
-  "version": "2.1.5.6"
+  "version": "3.0.0-esphome"
 }
