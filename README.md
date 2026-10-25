@@ -711,7 +711,7 @@ This integration communicates via Bluetooth LE and supports nine protocol modes 
 | `v2.1.5.3` | `6b8c201` | Climate row labeled Target; keep last setpoint when off is 0 |
 | `v2.1.5.4` | `0c3d5f6` | ESPHome-heater: MUDIRO GATT held by `blproxyesp` |
 | `v2.1.5.5` | `95172ee` | ESPHome-heater: status from Mudiro last hex; no HA 5C/5D wait |
-| `v2.1.5.6` | | ESPHome-heater: refresh 5C16 so oil/pump/Hz/RPM stay writable |
+| `v2.1.5.6` | `703d328` | ESPHome-heater: refresh 5C16 so oil/pump/Hz/RPM stay writable |
 
 ### What stayed the same
 
